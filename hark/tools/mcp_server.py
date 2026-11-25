@@ -24,7 +24,7 @@ from mcp.server.stdio import stdio_server
 from hark import config
 from hark.tools import build_registry
 from hark.tools.base import Tool, ToolRegistry, ToolResult
-from hark.tools.safety import classify_claude_tool
+from hark.tools.safety import classify_claude_tool, describe_command, guarded_write
 
 ASK_TIMEOUT = 120.0  # the user has to hear the question and answer it
 APPROVAL_TTL = 120.0
@@ -40,8 +40,9 @@ APPROVE_SCHEMA = {
 }
 
 
-async def ask_confirm(question: str, socket_path: str | None = None) -> bool:
-    """Ask the user through the daemon. True only on a clear yes."""
+async def ask_confirm(question: str, socket_path: str | None = None, detail: str = "") -> bool:
+    """Ask the user through the daemon. True only on a clear yes. `detail` (the full
+    command) is shown on screen next to the spoken question."""
     try:
         reader, writer = await asyncio.wait_for(
             asyncio.open_unix_connection(str(socket_path or config.SOCKET_PATH)), 1.0
@@ -49,7 +50,10 @@ async def ask_confirm(question: str, socket_path: str | None = None) -> bool:
     except (OSError, TimeoutError):
         return False
     try:
-        writer.write((json.dumps({"cmd": "ask_confirm", "question": question}) + "\n").encode())
+        req = {"cmd": "ask_confirm", "question": question}
+        if detail:
+            req["detail"] = detail
+        writer.write((json.dumps(req) + "\n").encode())
         await writer.drain()
         deadline = time.monotonic() + ASK_TIMEOUT
         while (left := deadline - time.monotonic()) > 0:
@@ -123,27 +127,60 @@ class Approvals:
 
 
 def hark_question(registry: ToolRegistry, name: str, args: dict[str, Any]) -> str | None:
-    """The exact question the registry would ask for this hark tool call."""
-    if name == "omarchy":
-        from hark.tools.omarchy import confirm_question
-
-        return confirm_question(str(args.get("command", "")), args.get("args"))
+    """The exact question the registry would ask for this hark tool call, when it asks."""
     tool = registry.tools.get(name)
     if tool is None:
+        return None
+    try:
+        if tool.safety_of(args) != "destructive":
+            return None
+    except (ValueError, TypeError):
         return None
     return tool.confirm_prompt(args) if tool.confirm_prompt else f"Run {name}?"
 
 
-def question_for(tool_name: str, tool_input: dict[str, Any], reason: str, registry: ToolRegistry) -> str:
+SPEAK_WHOLE = 160  # a command this short is read out in full
+SPEAK_RISKY = 220  # otherwise its risky parts are, when they fit
+
+
+def _join_words(items: list[str]) -> str:
+    items = list(dict.fromkeys(items))
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def bash_question(cmd: str) -> tuple[str, str]:
+    """(spoken question, on-screen detail) for a shell command. Every risky action is
+    named in plain words; a command is never cut short in a way that hides one."""
+    _, steps = describe_command(cmd)
+    what = _join_words([s.action for s in steps] or ["run a command"])
+    flat = " ".join(cmd.split())
+    if len(flat) <= SPEAK_WHOLE:
+        return f"Claude wants to {what}: {flat}. Allow it?", ""
+    risky = "; ".join(s.text for s in steps)
+    if risky and len(risky) <= SPEAK_RISKY:
+        return f"Claude wants to {what}. The risky part is: {risky}. The full command is on screen. Allow it?", cmd
+    return (f"Claude wants to {what}, in a long command of {len(flat)} characters. "
+            f"It is shown on screen. Allow it?", cmd)
+
+
+def question_for(tool_name: str, tool_input: dict[str, Any], reason: str, registry: ToolRegistry) -> tuple[str, str]:
+    """(spoken question, on-screen detail) for a call that needs the user's yes."""
     if tool_name.startswith("mcp__hark__"):
         q = hark_question(registry, tool_name.removeprefix("mcp__hark__"), tool_input)
         if q:
-            return q
+            return q, ""
     if tool_name == "Bash":
-        cmd = str(tool_input.get("command", ""))
-        return f"Claude wants to run: {cmd[:160]}. Allow it?"
-    target = tool_input.get("file_path") or tool_input.get("path") or ""
-    return f"Claude wants to use {tool_name}{' on ' + str(target) if target else ''}. {reason} Allow it?"
+        return bash_question(str(tool_input.get("command", "")))
+    if tool_name in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
+        path = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
+        what = guarded_write(path) if path else None
+        return f"Claude wants to change {what + ': ' if what else ''}{path}. Allow it?", ""
+    if tool_name == "WebFetch":
+        return f"Claude wants to open the web address {tool_input.get('url', '')}. {reason} Allow it?", ""
+    target = tool_input.get("file_path") or tool_input.get("path") or tool_input.get("url") or ""
+    shown = json.dumps(tool_input)[:2000]
+    return f"Claude wants to use {tool_name.removeprefix('mcp__hark__')}{' on ' + str(target) if target else ''}. " \
+           f"{reason} Allow it?", shown
 
 
 async def approve(
@@ -154,8 +191,8 @@ async def approve(
         return {"behavior": "allow"}
     if decision == "deny":
         return {"behavior": "deny", "message": reason}
-    question = question_for(tool_name, tool_input, reason, registry)
-    if await ask(question):
+    question, detail = question_for(tool_name, tool_input, reason, registry)
+    if await ask(question, detail=detail):
         if tool_name.startswith("mcp__hark__"):
             approvals.grant(question)
         return {"behavior": "allow"}

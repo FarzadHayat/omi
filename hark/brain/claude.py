@@ -17,6 +17,10 @@ from hark.config import STATE_DIR, Config
 from hark.events import BrainEvent, TextDelta, ToolEnd, ToolStart, TurnContext, TurnDone
 
 MCP_PREFIX = "mcp__hark__"
+# Haiku thinks adaptively and its thinking cannot be switched off; garbled speech
+# recognition ("octavuses") made it think on about half the turns, holding back the first
+# word by 400 to 1100 ms. Low effort cut that to 2 turns in 8.
+TALKER_EFFORT = "low"
 
 
 def tool_name(name: str) -> str:
@@ -47,12 +51,14 @@ class ClaudeBrain:
         STATE_DIR.mkdir(parents=True, exist_ok=True)
         self.session = ClaudeSession(
             cfg.brain.claude.model, self._style, tools="", setting_sources="",
-            use_mcp=use_mcp, cwd=str(STATE_DIR), claude_cmd=claude_cmd)
+            use_mcp=use_mcp, cwd=str(STATE_DIR), claude_cmd=claude_cmd, effort=TALKER_EFFORT)
 
     def _prompt(self) -> str:
         return f"{self._style}\n\n{self._memory}" if self._memory else self._style
 
-    async def start(self) -> None:
+    async def start(self, memory_context: str = "") -> None:
+        self._memory = memory_context
+        self.session.system_prompt = self._prompt()
         await self.session.start()
 
     async def cancel(self) -> None:

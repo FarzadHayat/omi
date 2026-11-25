@@ -16,10 +16,36 @@ from hark.events import TextDelta, TurnContext, TurnDone
 
 log = logging.getLogger(__name__)
 
+MEMORY_SYNC_S = 15.0  # how often memory files changed by others are picked up
+
+
+class UnavailableSTT:
+    """Stands in for an STT engine that failed to load, so typed turns still work."""
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+
+    def transcribe(self, pcm: np.ndarray) -> str:
+        raise RuntimeError(f"speech recognition is unavailable: {self.reason}")
+
+
+class UnavailableTTS:
+    """Stands in for a TTS engine that failed to load: replies still come back as text."""
+
+    sample_rate = 16000
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+
+    def synth(self, text: str):
+        raise RuntimeError(f"speech synthesis is unavailable: {self.reason}")
+
 
 async def build(cfg: Config) -> Daemon:
     """Create every component (model loads run concurrently in threads) and return a
-    Daemon whose start() warms the brains, worker and engines concurrently."""
+    Daemon whose start() warms the brains, worker and engines concurrently. A part that
+    fails to load is replaced by a stand-in that explains itself, and is listed in
+    status, so the rest of hark still starts."""
     from hark import brain as brains
     from hark import memory as memories
     from hark import stt as stts
@@ -33,11 +59,26 @@ async def build(cfg: Config) -> Daemon:
     from hark.tools import build_registry
     from hark.tools.base import ToolRegistry
 
+    errors: dict[str, str] = {}
     stt, tts, memory = await asyncio.gather(
         asyncio.to_thread(stts.create, cfg.stt),
         asyncio.to_thread(ttss.create, cfg.tts),
         asyncio.to_thread(memories.create, cfg.memory),
+        return_exceptions=True,
     )
+    if isinstance(stt, BaseException):
+        errors["stt"] = str(stt) or type(stt).__name__
+        stt = UnavailableSTT(errors["stt"])
+    if isinstance(tts, BaseException):
+        errors["tts"] = str(tts) or type(tts).__name__
+        tts = UnavailableTTS(errors["tts"])
+    if isinstance(memory, BaseException):
+        errors["memory"] = str(memory) or type(memory).__name__
+        memory = memories.NullMemory()
+    for name, error in errors.items():
+        log.error("%s failed to load: %s", name, error)
+    if hasattr(memory, "start_autosync"):
+        memory.start_autosync(MEMORY_SYNC_S)
     registry = build_registry(cfg)
     for tool in memory_tools(memory):
         registry.register(tool)
@@ -86,7 +127,7 @@ async def build(cfg: Config) -> Daemon:
 
     async def new_talker(value: str) -> Any:
         brain = brains.create_talker(replace(cfg, brain=replace(cfg.brain, talker=value)), registry)
-        await brain.start()
+        await brain.start(memory.context())
         return brain
 
     async def new_tts(value: str) -> Any:
@@ -99,30 +140,49 @@ async def build(cfg: Config) -> Daemon:
         await asyncio.to_thread(_warm_stt, engine)
         return engine
 
-    warmups = [
-        talker.start,
-        lambda: asyncio.to_thread(_warm_tts, tts),
-        lambda: asyncio.to_thread(_warm_stt, stt),
-        lambda: asyncio.to_thread(warm),
-    ]
+    warmups = {
+        # The talker warms up with the memory context turn one will carry, so the
+        # prompt prefix is cached and nothing restarts on the first turn.
+        "talker": lambda: talker.start(memory.context()),
+        "tts": lambda: asyncio.to_thread(_warm_tts, tts),
+        "stt": lambda: asyncio.to_thread(_warm_stt, stt),
+        "router": lambda: asyncio.to_thread(warm),
+    }
     if worker is not None:
-        warmups.append(worker.start)
+        warmups["worker"] = worker.start
 
-    return Daemon(
+    async def stop_sync() -> None:
+        if hasattr(memory, "stop_autosync"):
+            await asyncio.to_thread(memory.stop_autosync)
+
+    daemon = Daemon(
         session,
         cfg,
         audio_in=PipeWireIn(cfg.audio.source),
         factories={"brain.talker": new_talker, "tts.engine": new_tts, "stt.engine": new_stt},
         wav_out=WavOut,
         warmups=warmups,
+        closers=[stop_sync],
+        # A missing profile is written from the facts once, while nobody is talking.
+        idle_jobs=[lambda: jobs.profile_if_missing(memory, llm)],
+        errors=errors,
     )
+    if cfg.web.enabled:
+        from hark.web.server import WebServer
+
+        daemon.web = WebServer(daemon, cfg.web)
+    return daemon
 
 
 def _warm_tts(tts: Any) -> None:
     """First synthesis pays for graph setup; do it before the user is waiting."""
+    if isinstance(tts, UnavailableTTS):
+        return
     for _ in tts.synth("Ready."):
         pass
 
 
 def _warm_stt(stt: Any) -> None:
+    if isinstance(stt, UnavailableSTT):
+        return
     stt.transcribe(np.zeros(8000, dtype=np.float32))

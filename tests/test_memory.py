@@ -537,3 +537,76 @@ def test_rebuild_profile(mem, cfg):
     assert "Building a" not in llm.prompts[0]  # project facts are not profile material
     assert (pathlib.Path(cfg.dir) / "profile.md").read_text().strip() == out
     assert out in mem.context()
+
+
+# --- fixes ---
+
+
+def test_remember_refuses_secrets_and_keeps_numbers_out_of_names(mem, cfg):
+    tools = {t.name: t for t in memory_tools(mem)}
+    r = run(tools["remember"].fn(fact="The wifi password is hunter2 and my github token is ghp_ABCDEFGHIJKLMNOPQRSTUVWX12"))
+    assert not r.ok and "secret" in r.text
+    facts = pathlib.Path(cfg.dir) / "facts"
+    assert not facts.exists() or not list(facts.iterdir())
+    assert mem.save_fact("key", "my api key is sk-abcdefghijklmnopqrstuvwx") == ""
+    assert run(tools["remember"].fn(fact="Sam's locker number is 4471 at the gym")).ok
+    (name,) = [p.name for p in facts.iterdir()]
+    assert not any(ch.isdigit() for ch in name)
+
+
+def test_logged_turns_are_redacted_and_recallable_at_once(mem, cfg):
+    mem.log_turn("s1", "user", "my password is hunter2, remember I see Doctor Okafor on friday")
+    text = next((pathlib.Path(cfg.dir) / "sessions").iterdir()).read_text()
+    assert "hunter2" not in text and "password is [redacted]" in text
+    assert any("Okafor" in h.text for h in mem.recall("dentist Okafor"))
+
+
+def test_autosync_sees_new_and_rewritten_files(cfg, tmp_path):
+    shared = pathlib.Path(cfg.shared_dir)
+    write_shared(shared, "tea.md", "Tea", "drink", "Sam drinks green tea every morning.")
+    m = FileMemory(cfg)
+    m.start_autosync(0.05)
+    try:
+        write_shared(shared, "bike.md", "Bike", "ride", "Sam rides a red bicycle.")
+        write_shared(shared, "tea.md", "Tea", "drink", "Sam now drinks coffee every morning.")
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and not (m.recall("bicycle") and m.recall("coffee")):
+            time.sleep(0.02)
+        assert m.recall("bicycle") and m.recall("coffee")
+        assert not any("green tea" in h.text for h in m.recall("tea"))
+    finally:
+        m.stop_autosync()
+
+
+def test_frontmatter_block_scalars_and_flow_maps():
+    meta, body = parse_frontmatter(
+        "---\nname: Coffee\ndescription: >-\n  Takes coffee\n  black.\nnotes: |\n  one\n  two\n"
+        "metadata: {type: feedback, source: x}\n---\nBody")
+    assert meta["description"] == "Takes coffee black." and meta["notes"] == "one\ntwo"
+    assert meta["metadata"] == {"type": "feedback", "source": "x"} and body == "Body"
+
+
+def test_end_session_rebuilds_the_profile_when_facts_change(mem, cfg):
+    mem.log_turn("s1", "user", "I moved to Lisbon.")
+    llm = fake("- Sam moved to Lisbon.",
+               '[{"op": "ADD", "name": "Home city", "description": "where Sam lives", "type": "user", '
+               '"body": "Sam lives in Lisbon."}]',
+               "Sam lives in Lisbon.")
+    run(end_session(mem, "s1", llm))
+    assert len(llm.prompts) == 3 and "Write a short profile" in llm.prompts[2]
+    assert "Lisbon" in (pathlib.Path(cfg.dir) / "profile.md").read_text()
+    # nothing new: no profile rewrite
+    mem.log_turn("s2", "user", "hi")
+    llm2 = fake("- Said hi.", '[{"op": "NOOP"}]')
+    run(end_session(mem, "s2", llm2))
+    assert len(llm2.prompts) == 2
+
+
+def test_profile_written_at_startup_only_when_missing(mem, cfg):
+    from hark.memory.jobs import profile_if_missing
+
+    llm = fake("Sam likes tea.")
+    assert run(profile_if_missing(mem, llm)) == "" and llm.prompts == []  # no facts yet
+    mem.save_fact("Tea", "Sam likes tea.")
+    assert run(profile_if_missing(mem, llm)) == "Sam likes tea."
+    assert run(profile_if_missing(mem, llm)) == "" and len(llm.prompts) == 1  # profile exists now

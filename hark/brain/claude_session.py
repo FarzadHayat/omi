@@ -41,9 +41,11 @@ def mcp_config() -> str:
 class ClaudeSession:
     def __init__(self, model: str, system_prompt: str, *, tools: str = "",
                  setting_sources: str = "", use_mcp: bool | None = None,
-                 cwd: str | None = None, claude_cmd: list[str] | None = None) -> None:
+                 cwd: str | None = None, claude_cmd: list[str] | None = None,
+                 effort: str = "") -> None:
         self.model = model
         self.system_prompt = system_prompt
+        self.effort = effort  # "" leaves the CLI's default effort
         self.tools = tools  # "" means no built-in tools, only hark MCP tools
         self.setting_sources = setting_sources  # "" skips user hooks, settings and CLAUDE.md
         self.use_mcp = hark_mcp_available() if use_mcp is None else use_mcp
@@ -78,6 +80,8 @@ class ClaudeSession:
             "--disable-slash-commands",
             "--strict-mcp-config",
         ]
+        if self.effort:
+            cmd += ["--effort", self.effort]
         if self.use_mcp:
             cmd += ["--mcp-config", mcp_config(), "--permission-prompt-tool", "mcp__hark__approve"]
         else:
@@ -86,7 +90,10 @@ class ClaudeSession:
 
     @property
     def alive(self) -> bool:
-        return self._proc is not None and self._proc.returncode is None
+        """A process that can take a turn. Its reader ending means stdout hit EOF: the
+        process is gone even when asyncio has not reaped it yet."""
+        return (self._proc is not None and self._proc.returncode is None
+                and self._reader is not None and not self._reader.done())
 
     # --- process lifecycle ---
 
@@ -228,14 +235,26 @@ class ClaudeSession:
 
     async def send(self, content: str) -> AsyncIterator[dict[str, Any]]:
         """Run one turn. Yields raw stream-json messages, ending with the result.
-        Ends early, with no result, once interrupt() is called."""
-        await self._ensure_ready()
+        Ends early, with no result, once interrupt() is called. A process that died
+        since the last turn is replaced once before the turn is given up."""
         q: asyncio.Queue = asyncio.Queue()
-        self._turn_q, self._turn_done = q, asyncio.get_running_loop().create_future()
-        cancel = self._cancel = asyncio.Event()
-        self.turns += 1
-        await self._write({"type": "user", "session_id": "", "parent_tool_use_id": None,
-                           "message": {"role": "user", "content": content}})
+        for attempt in (1, 2):
+            await self._ensure_ready()
+            self._turn_q, self._turn_done = q, asyncio.get_running_loop().create_future()
+            cancel = self._cancel = asyncio.Event()
+            try:
+                await self._write({"type": "user", "session_id": "", "parent_tool_use_id": None,
+                                   "message": {"role": "user", "content": content}})
+            except (ConnectionError, AssertionError):
+                if attempt == 2:
+                    q.put_nowait(EOF)
+                    break
+                await self.restart()
+                continue
+            self.turns += 1
+            if not self.alive:
+                q.put_nowait(EOF)  # it died between the check and the write: nobody else will say so
+            break
         while True:
             try:
                 msg = await race(q.get(), cancel)

@@ -31,6 +31,29 @@ class Fact:
     source: str = "own"  # "own" | "shared"
 
 
+# Text that looks like a password, key or token. Memory never stores it: facts are
+# refused, transcripts get it redacted.
+_LABEL = r"password|passphrase|passcode|pin code|api[ _-]?key|secret(?: key)?|access key|token"
+_LABELLED = re.compile(rf"(?i)\b({_LABEL})\b(\s*(?:is|was|:|=)\s*)(\S+)")
+_BARE = re.compile(r"(?i)\b(password|passcode|passphrase)(\s+)(?=\S*\d)(\S+)")
+_RAW = re.compile(
+    r"\bsk-[A-Za-z0-9_-]{16,}|\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|\bgithub_pat_[A-Za-z0-9_]{20,}"
+    r"|\bxox[abprs]-[A-Za-z0-9-]{10,}|\bAKIA[0-9A-Z]{16}\b|\bglpat-[A-Za-z0-9_-]{16,}|\bAIza[0-9A-Za-z_-]{30,}"
+    r"|-----BEGIN [A-Z ]*KEY[\s\S]*?(?:-----END [A-Z ]*KEY-----|$)|\b\d{3}-\d{2}-\d{4}\b|\b(?:\d[ -]?){13,19}\b"
+)
+
+
+def looks_secret(text: str) -> bool:
+    return bool(_LABELLED.search(text) or _BARE.search(text) or _RAW.search(text))
+
+
+def redact(text: str) -> str:
+    """Keep the words, drop the secret: "password is hunter2" -> "password is [redacted]"."""
+    text = _LABELLED.sub(lambda m: f"{m.group(1)}{m.group(2)}[redacted]", text)
+    text = _BARE.sub(lambda m: f"{m.group(1)}{m.group(2)}[redacted]", text)
+    return _RAW.sub("[redacted]", text)
+
+
 def approx_tokens(text: str) -> int:
     """Cheap token estimate, deliberately on the high side (4 characters per token)."""
     return (len(text) + 3) // 4
@@ -104,21 +127,45 @@ def parse_frontmatter(text: str) -> tuple[dict, str]:
         return {}, text
     meta: dict = {}
     current: str | None = None
+    block: tuple[str, str] | None = None  # (key, style) of a > or | block scalar being read
+    block_lines: list[str] = []
+
+    def end_block() -> None:
+        if block is not None:
+            key, style = block
+            meta[key] = ("\n" if style == "|" else " ").join(block_lines).strip()
+
     for line in lines[1:end]:
+        if block is not None:
+            if not line.strip() or line[0] in " \t":
+                block_lines.append(line.strip())
+                continue
+            end_block()
+            block, block_lines = None, []
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         key, sep, value = line.strip().partition(":")
         if not sep:
             continue
-        key, value = key.strip(), _unquote(value.strip())
+        key, raw = key.strip(), value.strip()
+        value = _unquote(raw)
         if line[0] in " \t" and current is not None and isinstance(meta.get(current), dict):
             meta[current][key] = value
+        elif re.fullmatch(r"[>|][+-]?", raw):
+            block, current = (key, raw[0]), None
+        elif raw.startswith("{") and raw.endswith("}"):
+            meta[key] = {
+                k.strip(): _unquote(v.strip())
+                for k, _, v in (p.partition(":") for p in raw[1:-1].split(",")) if k.strip()
+            }
+            current = None
         elif value == "":
             meta[key] = {}
             current = key
         else:
             meta[key] = value
             current = None
+    end_block()
     return meta, "\n".join(lines[end + 1 :]).lstrip("\n")
 
 

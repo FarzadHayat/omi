@@ -148,10 +148,12 @@ class FakeBrain:
         self.cancels = 0
         self.closed = False
         self.started = False
+        self.started_with: str | None = None
         self._cancel = asyncio.Event()
 
-    async def start(self) -> None:
+    async def start(self, memory_context: str = "") -> None:
         self.started = True
+        self.started_with = memory_context
 
     async def turn(self, user_text: str, ctx: TurnContext) -> AsyncIterator[BrainEvent]:
         self.turns.append((user_text, ctx))

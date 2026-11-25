@@ -50,6 +50,10 @@ def turn(content):
     out({"type": "system", "subtype": "init"})
     if "die" in content:
         os._exit(3)
+    if "vanish" in content:  # stdout gone, process not reaped yet: the window that used to hang
+        os.close(1)
+        time.sleep(3)
+        os._exit(3)
     if "slow" in content or "stubborn" in content:
         for _ in range(200):
             if interrupted.is_set() and "stubborn" not in content:
@@ -273,3 +277,45 @@ async def test_live_claude_chat_warm_and_interrupt(tmp_path, monkeypatch):
     assert done1 == TurnDone() and done2 == TurnDone() and done3 == TurnDone()
     assert text1 and text2 and text3
     assert rest[-1] == TurnDone(cancelled=True) and cancel_s < 0.1
+
+
+# --- fixes ---
+
+
+async def test_start_with_memory_means_no_restart_on_turn_one(fake_claude):
+    cmd, log = fake_claude
+    brain = ClaudeBrain(Config(), claude_cmd=cmd, use_mcp=False)
+    await brain.start("The user likes tea.")
+    try:
+        await collect(brain, "hi", TurnContext("s1", memory_context="The user likes tea."))
+    finally:
+        await brain.close()
+    argvs = [entry["argv"] for entry in log_lines(log) if "argv" in entry]
+    assert len(argvs) == 1
+    assert argvs[0][argvs[0].index("--append-system-prompt") + 1].endswith("The user likes tea.")
+
+
+async def test_turn_after_a_crash_never_hangs(fake_claude):
+    """The CLI dying used to leave the next turn waiting forever or failing at random."""
+    cmd, _ = fake_claude
+    brain = ClaudeBrain(Config(), claude_cmd=cmd, use_mcp=False)
+    await brain.start()
+    try:
+        for word in ("die", "vanish", "die", "vanish"):
+            events = await asyncio.wait_for(collect(brain, f"{word} now"), 5)
+            assert events[-1].error
+            events = await asyncio.wait_for(collect(brain, "hi"), 5)
+            assert events[-1] == TurnDone(), events[-1]
+    finally:
+        await brain.close()
+
+
+# --- speed ---
+
+
+def test_talker_runs_at_low_effort_and_other_sessions_keep_the_default(tmp_path, monkeypatch):
+    # Haiku's adaptive thinking held back the first word on garbled transcripts.
+    monkeypatch.setenv("HARK_STATE_DIR", str(tmp_path))
+    cmd = ClaudeBrain(Config(), use_mcp=False).session.command()
+    assert cmd[cmd.index("--effort") + 1] == "low"
+    assert "--effort" not in claude_session.ClaudeSession("haiku", "x", use_mcp=False).command()

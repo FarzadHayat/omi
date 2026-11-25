@@ -9,7 +9,7 @@ from pathlib import Path
 from hark.config import MemoryConfig
 from hark.memory.base import Hit, Memory
 from hark.memory.index import Index
-from hark.memory.store import FACT_TYPES, Fact, Store
+from hark.memory.store import FACT_TYPES, Fact, Store, looks_secret, redact
 
 __all__ = ["Hit", "Memory", "FileMemory", "NullMemory", "create"]
 
@@ -32,6 +32,8 @@ class FileMemory:
         self._lock = threading.RLock()
         self._sessions: dict[str, Path] = {}
         self._context = ""
+        self._stop_sync = threading.Event()
+        self._sync_thread: threading.Thread | None = None
         self.sync()
 
     # --- the Memory contract ---
@@ -43,6 +45,9 @@ class FileMemory:
         return self._index.search(query, k)
 
     def save_fact(self, name: str, body: str, description: str = "", type: str = "user") -> str:
+        if looks_secret(f"{name} {description} {body}"):
+            log.warning("memory: refused a fact that looked like a secret")
+            return ""
         if type not in FACT_TYPES:
             type = "user"
         with self._lock:
@@ -74,7 +79,8 @@ class FileMemory:
                     path = None  # that session already ended: a late turn starts a new file
                 path = path or self._store.new_session_path(session_id)
                 self._sessions[session_id] = path
-            self._store.append_turn(path, role, text)
+            self._store.append_turn(path, role, redact(text))
+            self._index.upsert_file(path)  # recallable at once, not after a restart
 
     def end_session(self, session_id: str, digest: str) -> None:
         with self._lock:
@@ -109,6 +115,33 @@ class FileMemory:
             changed = self._index.sync()
             self._refresh_context()
             return changed
+
+    def profile(self) -> str:
+        return self._store.profile()
+
+    def start_autosync(self, interval: float = 15.0) -> None:
+        """Re-read changed files every interval seconds in a background thread, so facts
+        other agents or other machines write, and edits in Obsidian, are picked up.
+        Files are compared one by one (mtime and size): an edit in place counts."""
+        if self._sync_thread is not None:
+            return
+
+        def loop() -> None:
+            while not self._stop_sync.wait(interval):
+                try:
+                    self.sync()
+                except Exception:
+                    log.exception("memory sync failed")
+
+        self._stop_sync.clear()
+        self._sync_thread = threading.Thread(target=loop, name="hark-memory-sync", daemon=True)
+        self._sync_thread.start()
+
+    def stop_autosync(self) -> None:
+        self._stop_sync.set()
+        if self._sync_thread is not None:
+            self._sync_thread.join(timeout=2.0)
+            self._sync_thread = None
 
     def _refresh_context(self) -> None:
         self._context = _join_context(self._store.profile(), self._store.carryover())

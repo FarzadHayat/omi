@@ -1,0 +1,423 @@
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+import Quickshell
+import qs.Commons
+import qs.Commons as Commons
+import qs.Ui
+import "Model.js" as Model
+
+// Hark in the bar: a small mark for the assistant's state, and a panel with the
+// conversation, a field for typed requests, Yes and No while a question waits,
+// and Stop. Everything is reachable from the keyboard: arrows move the cursor,
+// Enter or Space acts, Y and N answer, Escape closes. omarchy-shell hark toggle
+// opens it from a key.
+Panel {
+  id: root
+  moduleName: "hark"
+  ipcTarget: "hark"
+
+  readonly property color foreground: bar ? bar.foreground : Commons.Color.foreground
+  readonly property color urgent: bar ? bar.urgent : Commons.Color.urgent
+  readonly property color dim: Qt.darker(foreground, 1.55)
+  readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
+
+  Commons.Translations { id: strings; directory: Qt.resolvedUrl("i18n") }
+
+  Service { id: hark }
+  // For the QML harness.
+  property alias service: hark
+
+  readonly property string phase: hark.phase
+  readonly property string stateLabel: strings.t("state." + phase)
+  readonly property string accessibleLabel: strings.t("orb.label").arg(stateLabel)
+
+  // The keyboard cursor walks these rows; Yes and No exist only while a question waits.
+  property int rowIndex: 0
+  property bool cursorActive: false
+  readonly property var rows: (hark.confirm ? ["yes", "no"] : []).concat(["input", "stop"])
+  readonly property string currentRow: cursorActive ? rows[Math.max(0, Math.min(rowIndex, rows.length - 1))] : ""
+
+  function setRowCursor(id) {
+    cursorActive = true
+    rowIndex = Math.max(0, rows.indexOf(id))
+  }
+
+  function moveCursor(dy) {
+    if (!cursorActive) { cursorActive = true; return }
+    rowIndex = Math.max(0, Math.min(rows.length - 1, rowIndex + dy))
+  }
+
+  function activate(id) {
+    if (id === "yes") hark.answer(true)
+    else if (id === "no") hark.answer(false)
+    else if (id === "input") focusInput()
+    else if (id === "stop") hark.stop()
+  }
+
+  function focusInput() {
+    cursorActive = false
+    input.forceActiveFocus()
+  }
+
+  // Up or Down out of the text field hands the keys back to the cursor.
+  function leaveInput(dy) {
+    keyCatcher.forceActiveFocus()
+    setRowCursor("input")
+    moveCursor(dy)
+  }
+
+  function submit() {
+    if (hark.say(input.text)) input.text = ""
+  }
+
+  onOpenedChanged: if (opened) {
+    cursorActive = hark.confirm !== null
+    rowIndex = 0
+    Qt.callLater(function() { transcriptView.positionViewAtEnd() })
+  }
+
+  // A question that arrives while the panel is open takes the cursor to Yes,
+  // unless the user is typing.
+  Connections {
+    target: hark
+    function onConfirmChanged() {
+      if (hark.confirm && root.opened && !input.activeFocus) {
+        keyCatcher.forceActiveFocus()
+        root.setRowCursor("yes")
+      }
+    }
+  }
+
+  implicitWidth: button.implicitWidth
+  implicitHeight: button.implicitHeight
+  Accessible.role: Accessible.Button
+  Accessible.name: root.accessibleLabel
+
+  BarIconButton {
+    id: button
+    objectName: "harkButton"
+    anchors.fill: parent
+    bar: root.bar
+    // The mark is drawn below rather than as a glyph, so its shape can change.
+    iconComponent: Component { Item {} }
+    tooltipText: root.accessibleLabel
+    Accessible.role: Accessible.Button
+    Accessible.name: root.accessibleLabel
+    Accessible.description: strings.t("hint.talk")
+
+    Orb {
+      objectName: "barOrb"
+      x: (button.width - width) / 2
+      y: (button.height - height) / 2
+      size: Style.bar.iconSize > 0 ? Style.bar.iconSize : Style.font.icon
+      phase: root.phase
+      foreground: root.barForeground
+      accent: Commons.Color.accent
+      urgent: root.urgent
+      background: Commons.Color.background
+    }
+
+    onPressed: function(buttonCode) { root.toggle() }
+  }
+
+  KeyboardPanel {
+    id: panel
+    anchorItem: button
+    owner: root
+    bar: root.bar
+    open: root.opened
+    // Straight into the field to type, unless a question waits or the field is off.
+    focusTarget: hark.confirm || !hark.connected ? keyCatcher : input
+    contentWidth: panel.fittedContentWidth(Style.space(380))
+    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(560))
+
+    PanelKeyCatcher {
+      id: keyCatcher
+      anchors.fill: parent
+      blocked: input.activeFocus
+      onMoveRequested: function(dx, dy) { if (dy !== 0) root.moveCursor(dy) }
+      onActivateRequested: if (root.cursorActive) root.activate(root.currentRow)
+      onCloseRequested: root.close()
+      onTabRequested: function(direction) { root.switchPanel(direction) }
+      onTextKey: function(t) {
+        var key = t.toLowerCase()
+        if (key === "y" && hark.confirm) hark.answer(true)
+        else if (key === "n" && hark.confirm) hark.answer(false)
+        else if (key === "i") root.focusInput()
+      }
+
+      ColumnLayout {
+        id: column
+        x: Style.space(2)
+        width: parent.width - Style.space(4)
+        spacing: Style.space(12)
+
+        // ---- Hero: the mark, the name and the state ----------------------
+        RowLayout {
+          Layout.fillWidth: true
+          spacing: Style.space(14)
+
+          Orb {
+            objectName: "panelOrb"
+            size: Style.font.display
+            phase: root.phase
+            foreground: root.foreground
+            accent: Commons.Color.accent
+            urgent: root.urgent
+            background: Commons.Color.background
+            Layout.alignment: Qt.AlignVCenter
+          }
+
+          ColumnLayout {
+            Layout.fillWidth: true
+            spacing: Style.space(2)
+
+            Text {
+              textFormat: Text.PlainText
+              text: strings.t("title")
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.subtitle
+              font.bold: true
+            }
+
+            Text {
+              objectName: "stateText"
+              Layout.fillWidth: true
+              textFormat: Text.PlainText
+              text: (hark.notice !== "" ? hark.notice : root.stateLabel).toUpperCase()
+              color: hark.notice !== "" ? root.urgent : root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+              font.letterSpacing: 1.2
+              elide: Text.ElideRight
+              Accessible.role: Accessible.StaticText
+              Accessible.name: text
+            }
+
+            Text {
+              Layout.fillWidth: true
+              textFormat: Text.PlainText
+              text: root.phase === "offline" ? strings.t("hint.offline") : strings.t("hint.talk")
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+            }
+          }
+        }
+
+        PanelSeparator { Layout.fillWidth: true; foreground: root.foreground }
+
+        // ---- The conversation ---------------------------------------------
+        Text {
+          visible: hark.lines.length === 0
+          Layout.fillWidth: true
+          textFormat: Text.PlainText
+          text: strings.t("transcript.empty")
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+        }
+
+        ListView {
+          id: transcriptView
+          objectName: "transcript"
+          visible: hark.lines.length > 0
+          Layout.fillWidth: true
+          Layout.preferredHeight: Math.min(contentHeight, Style.space(260))
+          clip: true
+          spacing: Style.space(8)
+          boundsBehavior: Flickable.StopAtBounds
+          model: hark.lines
+          onCountChanged: Qt.callLater(positionViewAtEnd)
+          ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+          Accessible.role: Accessible.List
+          Accessible.name: strings.t("title")
+
+          delegate: Column {
+            required property var modelData
+            width: transcriptView.width - Style.space(8)
+            spacing: Style.space(1)
+            Accessible.role: Accessible.StaticText
+            Accessible.name: strings.t("role." + modelData.role) + ": " + modelData.text
+
+            Text {
+              textFormat: Text.PlainText
+              text: strings.t("role." + modelData.role)
+              color: modelData.role === "user" ? root.dim : Commons.Color.accent
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+            }
+
+            Text {
+              width: parent.width
+              textFormat: Text.PlainText
+              text: modelData.text
+              color: modelData.role === "progress" ? root.dim : root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              wrapMode: Text.Wrap
+            }
+          }
+        }
+
+        // ---- A question waiting for yes or no -----------------------------
+        BorderSurface {
+          objectName: "confirmCard"
+          visible: hark.confirm !== null
+          Layout.fillWidth: true
+          implicitHeight: confirmColumn.implicitHeight + Style.space(20)
+          color: "transparent"
+          borderSpec: Border.controlSpec("normal", root.urgent, root.urgent)
+          radius: Style.cornerRadius
+
+          ColumnLayout {
+            id: confirmColumn
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.margins: Style.space(10)
+            spacing: Style.space(6)
+
+            Text {
+              textFormat: Text.PlainText
+              text: strings.t("confirm.title").toUpperCase()
+              color: root.urgent
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+            }
+
+            Text {
+              Layout.fillWidth: true
+              textFormat: Text.PlainText
+              text: hark.confirm ? hark.confirm.question : ""
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              wrapMode: Text.Wrap
+              Accessible.role: Accessible.StaticText
+              Accessible.name: text
+            }
+
+            Text {
+              visible: text !== ""
+              Layout.fillWidth: true
+              textFormat: Text.PlainText
+              text: hark.confirm ? hark.confirm.detail : ""
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.WrapAnywhere
+              maximumLineCount: 8
+              elide: Text.ElideRight
+            }
+
+            RowLayout {
+              Layout.fillWidth: true
+              spacing: Style.space(8)
+
+              Button {
+                objectName: "yesButton"
+                text: strings.t("confirm.yes")
+                bordered: true
+                hasCursor: root.currentRow === "yes"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onHovered: function(on) { if (on) root.setRowCursor("yes") }
+                onClicked: hark.answer(true)
+                Accessible.role: Accessible.Button
+                Accessible.name: text
+              }
+
+              Button {
+                objectName: "noButton"
+                text: strings.t("confirm.no")
+                bordered: true
+                hasCursor: root.currentRow === "no"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onHovered: function(on) { if (on) root.setRowCursor("no") }
+                onClicked: hark.answer(false)
+                Accessible.role: Accessible.Button
+                Accessible.name: text
+              }
+
+              Item { Layout.fillWidth: true }
+
+              Text {
+                textFormat: Text.PlainText
+                text: strings.t("confirm.keys")
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+            }
+          }
+        }
+
+        // ---- Type a request -----------------------------------------------
+        TextField {
+          id: input
+          objectName: "requestField"
+          Layout.fillWidth: true
+          enabled: hark.connected
+          placeholderText: strings.t("input.placeholder")
+          hasCursor: root.currentRow === "input"
+          foreground: root.foreground
+          font.family: root.fontFamily
+          maximumLength: Model.MAX_REQUEST
+          Accessible.name: strings.t("input.label")
+
+          Keys.onPressed: function(event) {
+            if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+              root.submit()
+              event.accepted = true
+            } else if (event.key === Qt.Key_Escape) {
+              root.close()
+              event.accepted = true
+            } else if (event.key === Qt.Key_Up || event.key === Qt.Key_Down) {
+              root.leaveInput(event.key === Qt.Key_Up ? -1 : 1)
+              event.accepted = true
+            }
+          }
+        }
+
+        // ---- Stop ---------------------------------------------------------
+        RowLayout {
+          Layout.fillWidth: true
+          spacing: Style.space(8)
+
+          Button {
+            objectName: "stopButton"
+            text: strings.t("stop")
+            iconText: "\u{f04db}"
+            bordered: true
+            enabled: hark.connected
+            hasCursor: root.currentRow === "stop"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onHovered: function(on) { if (on) root.setRowCursor("stop") }
+            onClicked: hark.stop()
+            Accessible.role: Accessible.Button
+            Accessible.name: text
+          }
+
+          Item { Layout.fillWidth: true }
+
+          Text {
+            textFormat: Text.PlainText
+            text: strings.t("stop.hint")
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+        }
+      }
+    }
+  }
+}

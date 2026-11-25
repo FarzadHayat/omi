@@ -43,6 +43,13 @@ class Tool:
     fn: Callable[..., Awaitable[ToolResult]]  # async, called with the arguments as kwargs
     # For destructive tools: builds the question to ask from the arguments.
     confirm_prompt: Callable[[dict[str, Any]], str] | None = None
+    # Safety that depends on the arguments (which omarchy command, typing into a
+    # terminal). Overrides `safety` when set; raises ValueError for arguments that are
+    # never allowed.
+    safety_for: Callable[[dict[str, Any]], Safety] | None = None
+
+    def safety_of(self, args: dict[str, Any]) -> Safety:
+        return self.safety_for(args) if self.safety_for else self.safety
 
 
 @dataclass
@@ -75,9 +82,13 @@ class ToolRegistry:
         tool = self.tools.get(name)
         if tool is None:
             return ToolResult(False, f"There is no tool called {name}.")
-        if self.dry_run and tool.safety != "read":
+        try:
+            safety = tool.safety_of(args)
+        except (ValueError, TypeError) as exc:
+            return ToolResult(False, f"{name} refused: {exc}")
+        if self.dry_run and safety != "read":
             return ToolResult(True, f"Dry run: would call {name}.", {"args": args})
-        if tool.safety == "destructive":
+        if safety == "destructive":
             question = tool.confirm_prompt(args) if tool.confirm_prompt else f"Run {name}?"
             if self.confirm is None or not await self.confirm(question):
                 return ToolResult(False, NOT_CONFIRMED)

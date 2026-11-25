@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 import asyncio
+import re
 
 from hark.memory.base import Memory
+from hark.memory.store import looks_secret
 from hark.tools.base import Tool, ToolResult
 
 _STR = {"type": "string"}
+REFUSED_SECRET = "I don't save passwords, keys or other secrets."
 
 
 def _name_for(fact: str) -> str:
-    words = fact.split()
-    return " ".join(words[:8])
+    """A file name from the plain words only: anything with digits or symbols (a code,
+    a number, a token) stays out of file names, which show up in more places."""
+    words = [w for w in (w.strip(".,;:!?\"'()") for w in fact.split()) if re.fullmatch(r"[A-Za-z]{1,20}", w)]
+    return " ".join(words[:6]) or "voice note"
 
 
 def memory_tools(memory: Memory) -> list[Tool]:
@@ -20,6 +25,8 @@ def memory_tools(memory: Memory) -> list[Tool]:
         fact = " ".join(fact.split())
         if not fact:
             return ToolResult(False, "I did not catch what to remember.")
+        if looks_secret(fact):
+            return ToolResult(False, REFUSED_SECRET)
         await asyncio.to_thread(
             memory.save_fact, _name_for(fact), fact, description=fact[:120], type="user"
         )

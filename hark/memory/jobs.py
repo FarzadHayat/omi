@@ -10,7 +10,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from hark.memory.base import Hit, Memory
-from hark.memory.store import FACT_TYPES, Fact, trim_tokens
+from hark.memory.store import FACT_TYPES, Fact, looks_secret, trim_tokens
 
 log = logging.getLogger("hark.memory")
 
@@ -61,10 +61,6 @@ Facts:
 {facts}
 """
 
-_SECRET = re.compile(
-    r"(?i)(\b(password|passphrase|api[ _-]?key|secret)\b\s*(is|:|=)|\bsk-[A-Za-z0-9_-]{16,}"
-    r"|-----BEGIN [A-Z ]*KEY|\b\d{3}-\d{2}-\d{4}\b)"
-)
 
 
 def _clean_llm_text(text: str) -> str:
@@ -155,7 +151,7 @@ def apply_ops(memory: Memory, ops: list[dict]) -> list[str]:
         if op.get("op") not in ("ADD", "UPDATE"):
             continue
         text = f"{op.get('name', '')} {op.get('description', '')} {op.get('body', '')}"
-        if _SECRET.search(text):
+        if looks_secret(text):
             log.warning("memory: dropped a fact that looked like a secret")
             continue
         memory.save_fact(op["name"], op["body"], op.get("description", ""), op.get("type", "user"))
@@ -184,7 +180,8 @@ def _fact_hit_line(hit: Hit) -> str:
 
 
 async def end_session(memory: Any, session_id: str, llm: LLM) -> str:
-    """Digest the session, roll it into the carry-over, extract facts. Never raises.
+    """Digest the session, roll it into the carry-over, extract facts, and rewrite the
+    profile when facts changed. Never raises.
 
     Returns the digest ("" when the session was empty or the model failed).
     """
@@ -202,7 +199,22 @@ async def end_session(memory: Any, session_id: str, llm: LLM) -> str:
     try:
         similar = [h for h in await asyncio.to_thread(memory.recall, text, 5) if h.kind == "fact"]
         ops = await extract_facts(llm, text, [_fact_hit_line(h) for h in similar])
-        await asyncio.to_thread(apply_ops, memory, ops)
+        saved = await asyncio.to_thread(apply_ops, memory, ops)
     except Exception:
         log.exception("memory: fact extraction failed for session %s", session_id)
+        return text
+    if saved:
+        try:
+            await rebuild_profile(memory, llm)
+        except Exception:
+            log.exception("memory: profile rebuild failed for session %s", session_id)
     return text
+
+
+async def profile_if_missing(memory: Any, llm: LLM) -> str:
+    """Write profile.md when it is empty but facts exist (a fresh install with shared
+    facts, or a deleted profile). Returns the profile text, "" if nothing was done."""
+    has_profile = await asyncio.to_thread(lambda: bool(getattr(memory, "profile", lambda: "")()))
+    if has_profile:
+        return ""
+    return await rebuild_profile(memory, llm)

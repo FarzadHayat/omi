@@ -8,7 +8,7 @@ import pytest
 
 from hark.events import State, TextDelta, ToolEnd, ToolStart, TurnDone, WorkerDone, WorkerProgress
 from hark.memory.base import Hit
-from hark.session import HISTORY_LIMIT, Session, parse_yes_no
+from hark.session import CANCELLED_NOTE, HISTORY_LIMIT, NO_AUDIO, Session, parse_answer, parse_yes_no
 from tests.fakes import (
     CaptureOut,
     Events,
@@ -207,7 +207,7 @@ async def test_confirm_by_command(tmp_path):
     assert ev.kinds("confirm_request")[0]["question"] == "Close the window?"
     assert s.answer(True)
     res = await task
-    assert res.reply.endswith("Closed.") and s.calls == [("close_window", {})]
+    assert res.reply == "Closed." and s.calls == [("close_window", {})]  # the question is not in the reply
     assert not s.answer(True)  # nothing pending now
 
 
@@ -218,7 +218,7 @@ async def test_confirm_by_command_no(tmp_path):
     assert "Cancelled, not confirmed." in res.reply and s.calls == []
 
 
-@pytest.mark.parametrize("said,ok", [("yeah do it", True), ("Go ahead.", True), ("nope", False), ("hmm maybe", False)])
+@pytest.mark.parametrize("said,ok", [("yeah do it", True), ("Go ahead.", True), ("nope", False), ("wait", False)])
 async def test_confirm_by_voice(tmp_path, said, ok):
     s, _, task = await confirm_setup(tmp_path)
     ans = await s.run_turn(said)
@@ -397,3 +397,157 @@ async def test_stop_bounded_when_brain_cancel_is_slow(tmp_path):
     took = (time.perf_counter() - t) * 1000
     res = await task
     assert took < 100 and res.cancelled and s.state is State.IDLE
+
+
+# --- fixes ---
+
+
+@pytest.mark.parametrize(("said", "want"), [
+    ("yes", True), ("Yes please.", True), ("yeah, go ahead", True), ("do it", True),
+    ("Can you confirm what that deletes first?", None), ("What happens if I do it?", None),
+    ("Yeah, wait, which window?", None), ("Hmm, yeah I guess not", False),
+    ("Hold on, is that the right folder? Yep, the old one, right?", None), ("Yes, but only the second one", None),
+    ("no", False), ("don't", False), ("not now", False), ("wait", False), ("hmm maybe", None),
+    ("what is the weather", None), ("yes yes yes do it now please", None), ("", None),
+])
+def test_parse_answer_is_strict(said, want):
+    assert parse_answer(said) is want
+
+
+async def test_new_request_during_a_question_cancels_it_and_still_runs(tmp_path):
+    brain = FakeBrain()
+    s, ev, task = await confirm_setup(tmp_path, brain=brain)
+    tts = s.tts
+    res = await s.run_turn("what is the weather")
+    first = await task
+    assert s.calls == [] and first.cancelled  # the window was not closed
+    assert [t for t, _ in brain.turns] == ["what is the weather"] and res.reply == "Okay."
+    assert CANCELLED_NOTE in [t for _, t in tts.calls]  # said aloud, but not part of the reply
+
+
+async def test_unclear_answer_asks_again_then_counts_as_no(tmp_path):
+    tts = FakeTTS()
+    s, ev, task = await confirm_setup(tmp_path, tts=tts)
+    await s.run_turn("hmm maybe")
+    await wait_for(lambda: any("Please say yes or no" in t for _, t in tts.calls))
+    assert s.pending_confirm is not None
+    await s.run_turn("uh")
+    res = await task
+    assert s.calls == [] and "Cancelled" in res.reply
+
+
+async def test_answer_needs_the_current_question_id(tmp_path):
+    s, ev, task = await confirm_setup(tmp_path)
+    qid = ev.kinds("confirm_request")[0]["id"]
+    assert not s.answer(True, "stale-id")
+    assert s.answer(True, qid)
+    await task
+    assert s.calls == [("close_window", {})]
+
+
+async def test_yes_spoken_before_the_question_does_not_answer_it(tmp_path):
+    tts = FakeTTS()
+    s, ev, task = await confirm_setup(tmp_path, tts=tts)
+    before = s._question.asked_at - 1.0
+    await s.run_turn("yes", started=before)
+    assert s.pending_confirm is not None and s.calls == []
+    await s.run_turn("yes")
+    await task
+    assert s.calls == [("close_window", {})]
+
+
+async def test_total_ms_includes_playback(tmp_path):
+    brain = FakeBrain([(0.0, TextDelta("A reply that takes a while to play.")), (0.0, TurnDone())])
+    s, _ = make(tmp_path, brain, tts=FakeTTS(seconds_per_word=0.05), out=CaptureOut(speed=1))
+    res = await s.run_turn("hi")
+    t = res.timing
+    assert t["first_audio_ms"] <= t["total_ms"] and t["brain_done_ms"] <= t["total_ms"]
+    assert t["total_ms"] - t["first_audio_ms"] > 200  # about 0.4 s of audio played in between
+
+
+class CountingSTT:
+    def __init__(self, delay):
+        self.delay, self.active, self.peak, self.calls = delay, 0, 0, 0
+        self.lock = __import__("threading").Lock()
+
+    def transcribe(self, pcm):
+        with self.lock:
+            self.active += 1
+            self.calls += 1
+            self.peak = max(self.peak, self.active)
+        time.sleep(self.delay)
+        with self.lock:
+            self.active -= 1
+        return "what time is it"
+
+
+async def test_barge_in_does_not_stack_transcriptions(tmp_path):
+    s, _ = make(tmp_path)
+    stt = s.stt = CountingSTT(0.3)
+    pcm = np.zeros(1600, np.float32)
+    tasks = []
+    for _ in range(4):
+        tasks.append(asyncio.create_task(s.run_turn(pcm=pcm)))
+        await asyncio.sleep(0.05)
+    results = await asyncio.gather(*tasks)
+    assert stt.peak <= 2  # one stale transcription at most, beside the current one
+    assert stt.calls < 4  # the ones still waiting when the user spoke again were dropped
+    assert not results[-1].cancelled and results[-1].user_text == "what time is it"
+    await s.close()
+
+
+class FakeStreamingSTT:
+    def __init__(self, decode_s=0.0):
+        self.decode_s, self.fed, self.events = decode_s, 0, []
+
+    def start(self):
+        self.fed = 0
+        self.events.append("start")
+
+    def feed(self, pcm):
+        time.sleep(self.decode_s)
+        self.fed += len(pcm)
+        self.events.append("feed")
+        return ""
+
+    def finish(self):
+        self.events.append("finish")
+        return "what time is it"
+
+    def transcribe(self, pcm):
+        raise AssertionError("streaming engines get chunks, not whole files")
+
+
+async def test_streaming_utterance_decodes_while_talking(tmp_path):
+    s, ev = make(tmp_path)
+    stt = s.stt = FakeStreamingSTT(decode_s=0.02)
+    await s.begin_utterance()
+    assert s.state is State.LISTENING
+    for _ in range(20):  # 20 chunks of 32 ms, decoded as they arrive
+        s.feed_audio(np.zeros(512, np.float32))
+        await asyncio.sleep(0.03)
+    res = await s.end_utterance()
+    assert stt.fed == 20 * 512 and stt.events[0] == "start" and stt.events[-1] == "finish"
+    assert res.user_text == "what time is it" and res.timing["stt_ms"] < 100
+    assert s.state is State.IDLE
+    await s.close()
+
+
+async def test_utterance_with_no_audio_is_an_error(tmp_path):
+    s, _ = make(tmp_path)
+    await s.begin_utterance()
+    res = await s.end_utterance()
+    assert res.error == NO_AUDIO and s.state is State.IDLE
+    await s.close()
+
+
+async def test_whole_engine_utterance_transcribes_all_chunks(tmp_path):
+    s, _ = make(tmp_path)
+    seen = []
+    s.stt.transcribe = lambda pcm: seen.append(len(pcm)) or "hello there"
+    await s.begin_utterance()
+    for _ in range(3):
+        s.feed_audio(np.zeros(1600, np.float32))
+    res = await s.end_utterance()
+    assert seen == [4800] and res.user_text == "hello there"
+    await s.close()

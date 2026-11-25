@@ -88,6 +88,21 @@ class MemoryConfig:
 
 
 @dataclass
+class WebConfig:
+    # Phone and tablet page, reached privately through `tailscale serve`. The server only
+    # listens on 127.0.0.1 and only answers requests that came through tailscaled.
+    enabled: bool = True
+    port: int = 47911
+    # Tailscale logins (Tailscale-User-Login header) let in. Empty means the login that
+    # owns this machine on the tailnet, read from `tailscale status --json` at startup.
+    allowed_logins: list[str] = field(default_factory=list)
+    # Extra websocket origins accepted besides https://<host the page was loaded from>.
+    origins: list[str] = field(default_factory=list)
+    proxy_uid: int = 0  # owner of the process that may connect: tailscaled runs as root
+    theme: str = str(Path(os.environ.get("XDG_STATE_HOME", HOME / ".local/state")) / "omarchy/current/theme/colors.toml")
+
+
+@dataclass
 class Config:
     name: str = "Hark"  # what the assistant calls itself
     audio: AudioConfig = field(default_factory=AudioConfig)
@@ -95,6 +110,7 @@ class Config:
     tts: TtsConfig = field(default_factory=TtsConfig)
     brain: BrainConfig = field(default_factory=BrainConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
+    web: WebConfig = field(default_factory=WebConfig)
 
 
 def _merge(obj, data: dict) -> None:

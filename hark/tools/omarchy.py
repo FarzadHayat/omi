@@ -1,9 +1,11 @@
 """Omarchy integration: the omarchy-* command allowlist and spoken app names.
 
 The allowlist is generated at import from the "# omarchy:" header comments of the
-scripts, so it follows whatever Omarchy version is installed. Anything that
-installs, removes, updates, resets, touches power or runs an arbitrary command is
-destructive and needs the user's yes.
+scripts, so it follows whatever Omarchy version is installed. Only the commands in
+_REVIEWED (checked by hand, each with the arguments it may take) and read-only
+commands run without asking; everything else, including any command that takes a
+path, URL or command, is destructive and needs the user's yes. Arguments that a
+shell would treat specially, or that climb out of a folder, are never passed on.
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
-from hark.tools.base import NOT_CONFIRMED, Safety, Tool, ToolRegistry, ToolResult
+from hark.tools.base import Safety, Tool, ToolResult
 from hark.tools.system import run
 
 BIN = Path(os.environ.get("OMARCHY_PATH", "/usr/share/omarchy")) / "bin"
@@ -31,12 +33,70 @@ _DESTRUCTIVE_PARTS = {
     "hw", "debug", "upload", "share", "sync", "channel", "branch", "snapshot", "firmware",
     "close", "all",
 }
-# Groups whose commands change only reversible things (look, focus, media, theme).
-_REVERSIBLE_GROUPS = {
-    "theme", "toggle", "launch", "audio", "brightness", "notification", "capture", "font",
-    "hyprland", "menu", "webapp", "clipboard", "weather", "tui", "screenrecord", "show",
+_FLAG = r"[a-z0-9][a-z0-9-]*"
+_NAME = r"[A-Za-z0-9][A-Za-z0-9 ._-]*"
+_ON_OFF = r"toggle|on|off"
+# Reviewed by hand: these change only reversible things (look, focus, media, theme).
+# Each argument must fully match one of the patterns. Not here means destructive.
+_REVIEWED: dict[str, tuple[str, ...]] = {
+    "audio-input-mute": (),
+    "audio-output-switch": (),
+    "audio-output-sink": (),
+    "audio-output-volume": (r"raise|lower|mute-toggle|[+-]?\d{1,3}",),
+    "audio-source-switch": (r"next|previous",),
+    "brightness-display": (r"--no-osd|\+?\d{1,3}%-?",),
+    "brightness-keyboard": (r"--no-osd|up|down|cycle|off|restore",),
+    "capture-qr": (),
+    "capture-text": (),
+    "capture-screenshot": (r"smart|region|windows|fullscreen|scroll|copy|save",),
+    "capture-screenrecording": (r"--fullscreen|--with-desktop-audio|--with-microphone-audio|--stop-recording|--status",),
+    "font-set": (_NAME,),
+    "hyprland-corners": (r"theme|sharp|rounded",),
+    "hyprland-focus-app": (_NAME,),
+    "hyprland-monitor-focused": (),
+    "hyprland-monitor-laptop": (),
+    "hyprland-monitor-scaling": (r"up|down",),
+    "hyprland-toggle": (_FLAG,),
+    "hyprland-window-gaps-toggle": (),
+    "hyprland-window-minimize": (),
+    "hyprland-window-pop": (),
+    "hyprland-window-single-square-aspect-toggle": (),
+    "hyprland-window-tiled-fullscreen-toggle": (),
+    "hyprland-window-transparency": (r"opaque|transparent|glassy",),
+    "hyprland-window-transparency-toggle": (),
+    "hyprland-workspace-layout-default": (r"dwindle|scrolling|floating",),
+    "hyprland-workspace-layout-toggle": (r"back",),
+    "launch-about": (),
+    "launch-browser": (),
+    "launch-nautilus": (),
+    "launch-terminal-tmux": (),
+    "menu": (r"[a-z][a-z-]*",),
+    "menu-clipboard": (),
+    "menu-emoji": (),
+    "menu-keybindings": (),
+    "notification-battery": (),
+    "notification-time": (),
+    "notification-weather": (),
+    "theme-bg-next": (),
+    "theme-bg-switcher": (),
+    "theme-set": (_FLAG,),
+    "theme-switcher": (),
+    "toggle": (_FLAG,),
+    "toggle-animations": (_ON_OFF,),
+    "toggle-bar": (_ON_OFF,),
+    "toggle-fullscreen-desktop": (_ON_OFF,),
+    "toggle-idle": (r"toggle|stay-awake|allow-idle|status",),
+    "toggle-nightlight": (r"--status",),
+    "toggle-notification-silencing": (),
+    "toggle-screensaver": (),
+    "toggle-touchpad": (_ON_OFF,),
+    "toggle-touchscreen": (_ON_OFF,),
+    "weather-icon": (),
 }
 _READ_LAST = {"list", "current", "status", "version", "present", "stats", "show", "get", "info"}
+# Never passed to any omarchy script: shell syntax (launch-or-focus evals its
+# arguments) and ".." path parts (toggle builds file paths from them).
+_BAD_ARG = re.compile(r"[\n\0$`;|&<>\\]|(^|/)\.\.(/|$)")
 
 
 @dataclass(frozen=True)
@@ -70,10 +130,10 @@ def classify(name: str, meta: dict[str, str]) -> Safety:
     # Scripts that take a command to run (launch-or-focus evals it) can do anything.
     if "command" in args or "cmd" in args or "exec" in args:
         return "destructive"
+    if name in _REVIEWED:
+        return "reversible"
     if parts[-1] in _READ_LAST or name == "version":
         return "read"
-    if parts[0] in _REVERSIBLE_GROUPS:
-        return "reversible"
     return "destructive"
 
 
@@ -100,19 +160,38 @@ def resolve_command(command: str) -> Command | None:
     return COMMANDS.get(key)
 
 
-def build_omarchy(command: str, args: list[str] | None = None) -> list[str]:
+def check_call(command: str, args: list[str] | None = None) -> Command:
+    """The command, if it may run with these arguments; ValueError otherwise."""
     cmd = resolve_command(command)
     if cmd is None:
         raise ValueError(f"omarchy {command} is not an allowed command")
-    args = [str(a) for a in (args or [])]
-    if any("\n" in a or "\0" in a for a in args):
-        raise ValueError("arguments may not contain newlines")
-    return [str(BIN / f"omarchy-{cmd.name}"), *args]
+    if args is not None and not isinstance(args, list):
+        raise ValueError("args must be a list")
+    for arg in [str(a) for a in (args or [])]:
+        if _BAD_ARG.search(arg):
+            raise ValueError(f"{arg!r} is not an allowed argument")
+        patterns = _REVIEWED.get(cmd.name)
+        if cmd.safety == "reversible" and patterns is not None:
+            if not any(re.fullmatch(p, arg) for p in patterns):
+                raise ValueError(f"{arg!r} is not an allowed argument for omarchy {cmd.name}")
+        elif cmd.safety == "read" and arg.startswith("-") and not re.fullmatch(r"--?[a-z][a-z-]*", arg):
+            raise ValueError(f"{arg!r} is not an allowed argument")
+    return cmd
+
+
+def build_omarchy(command: str, args: list[str] | None = None) -> list[str]:
+    cmd = check_call(command, args)
+    return [str(BIN / f"omarchy-{cmd.name}"), *[str(a) for a in (args or [])]]
 
 
 def command_safety(command: str) -> Safety:
     cmd = resolve_command(command)
     return cmd.safety if cmd else "destructive"
+
+
+def call_safety(args: dict) -> Safety:
+    """Safety of one omarchy tool call; ValueError when it may never run."""
+    return check_call(str(args.get("command", "")), args.get("args")).safety
 
 
 def confirm_question(command: str, args: list[str] | None = None) -> str:
@@ -121,17 +200,11 @@ def confirm_question(command: str, args: list[str] | None = None) -> str:
     return f"Run omarchy {words}?"
 
 
-def make_tool(registry: ToolRegistry) -> Tool:
-    """The omarchy tool. Its registry class is reversible; destructive commands ask
-    the user here, per command, through the registry's ConfirmFn."""
+def make_tool() -> Tool:
+    """The omarchy tool. Its safety is per command (call_safety), so the registry asks
+    the user before a destructive one, and refuses arguments that may never run."""
 
     async def omarchy(command: str, args: list[str] | None = None) -> ToolResult:
-        cmd = resolve_command(command)
-        if cmd is None:
-            return ToolResult(False, f"omarchy {command} is not an allowed command.")
-        if cmd.safety == "destructive":
-            if registry.confirm is None or not await registry.confirm(confirm_question(command, args)):
-                return ToolResult(False, NOT_CONFIRMED)
         rc, out, err = await run(build_omarchy(command, args), timeout=10.0)
         text = (out or err).strip()
         if rc != 0:
@@ -151,6 +224,8 @@ def make_tool(registry: ToolRegistry) -> Tool:
         },
         "reversible",
         omarchy,
+        confirm_prompt=lambda a: confirm_question(str(a.get("command", "")), a.get("args")),
+        safety_for=call_safety,
     )
 
 

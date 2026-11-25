@@ -95,6 +95,41 @@ async def type_text(text: str) -> ToolResult:
     return await run_ok(build_type_text(text), "Typed it.")
 
 
+# Window classes of terminals. Omarchy runs its TUIs (org.omarchy.*) in one too.
+_TERMINALS = re.compile(
+    r"(?<![a-z0-9])(foot|alacritty|kitty|ghostty|wezterm|konsole|xterm|terminator|tilix|"
+    r"gnome-terminal|st-256color|urxvt|warp)(?![a-z0-9])|^org\.omarchy\.", re.I)
+TYPE_LIMIT = 300  # longer text is never typed into a terminal
+
+
+def focused_is_terminal() -> bool:
+    """True when the focused window is a terminal, or when that cannot be told."""
+    from hark.tools import hyprland
+
+    try:
+        c = hyprland.hypr_query("activewindow") or {}
+    except (OSError, ValueError):
+        return True
+    return bool(_TERMINALS.search(str(c.get("class") or c.get("initialClass") or "")))
+
+
+def type_text_safety(args: dict) -> str:
+    """Typing into a terminal, or pressing Enter, can run or send anything: ask first."""
+    text = str(args.get("text", ""))
+    if "\n" in text or "\r" in text or focused_is_terminal():
+        if len(text) > TYPE_LIMIT:
+            raise ValueError("that is too long to type into a terminal or with Enter")
+        return "destructive"
+    return "reversible"
+
+
+def type_text_question(args: dict) -> str:
+    text = str(args.get("text", "")).replace("\r\n", "\n").replace("\r", "\n")
+    spoken = " [Enter] ".join(text.split("\n")).strip()
+    where = "the terminal" if focused_is_terminal() else "the focused window"
+    return f"Type {spoken} into {where}?"
+
+
 async def press_keys(combo: str) -> ToolResult:
     return await run_ok(build_press_keys(combo), f"Pressed {combo}.")
 
@@ -207,7 +242,8 @@ def tools() -> list[Tool]:
     s = {"type": "string"}
     return [
         Tool("type_text", "Type text into the focused window as if on the keyboard.",
-             _schema({"text": s}, ["text"]), "reversible", type_text),
+             _schema({"text": s}, ["text"]), "reversible", type_text,
+             type_text_question, type_text_safety),
         Tool("press_keys", "Press a key combo in the focused window, like ctrl+t or enter.",
              _schema({"combo": s}, ["combo"]), "destructive", press_keys,
              lambda a: f"Press {a.get('combo', 'those keys')}?"),

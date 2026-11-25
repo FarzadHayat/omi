@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#141416">
+<meta name="color-scheme" content="dark light">
+<title>Hark</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/theme.css">
+<script type="module" src="/app.js"></script>
+</head>
+<body>
+<main class="app" data-state="connecting">
+  <header class="bar">
+    <h1 id="name">Hark</h1>
+    <p class="state"><span class="shape" aria-hidden="true"></span><span id="state-text">Connecting</span></p>
+  </header>
+
+  <section class="log" id="log" aria-label="Conversation" tabindex="0">
+    <ol id="transcript" aria-live="polite" aria-relevant="additions"></ol>
+  </section>
+
+  <section class="confirm" id="confirm" aria-labelledby="confirm-q" hidden>
+    <p id="confirm-q" class="question"></p>
+    <p id="confirm-detail" class="detail" hidden></p>
+    <div class="answers">
+      <button type="button" id="yes" class="yes">Yes</button>
+      <button type="button" id="no" class="no">No</button>
+    </div>
+  </section>
+
+  <section class="controls" aria-label="Voice">
+    <button type="button" id="talk" class="talk" aria-pressed="false">
+      <span class="talk-label">Talk</span>
+    </button>
+    <button type="button" id="stop" class="stop">Stop</button>
+  </section>
+
+  <form id="compose" class="compose" autocomplete="off">
+    <label for="text" class="sr-only">Message</label>
+    <input id="text" name="text" type="text" enterkeyhint="send" autocapitalize="sentences">
+    <button type="submit" id="send">Send</button>
+  </form>
+</main>
+</body>
+</html>

@@ -153,3 +153,135 @@ def test_speed():
         worst = max(worst, (time.perf_counter() - t) * 1000)
     print(f"\nrouter: mean {per_call_ms * 1000:.1f} us, worst {worst * 1000:.1f} us per call")
     assert per_call_ms < 2 and worst < 2
+
+
+# --- speech-recognition form: no punctuation, number words, filler, mishearings ---
+# Installed apps are fixed here so the fuzzy matching is tested against a known list.
+
+SPOKEN_APPS = {"firefox", "chromium", "spotify", "obsidian", "discord", "signal", "terminal", "files", "file manager",
+        "browser", "web browser", "editor", "text editor", "whatsapp", "zoom", "ghostty", "moonlight", "kdenlive",
+        "libreoffice writer", "libreoffice calc", "obs studio", "localsend", "superwhisper", "nautilus", "btop",
+        "youtube", "google maps", "google photos", "hey", "basecamp", "bitwarden", "neovim", "x", "signed", "cursor",
+        "papers", "minecraft", "pinta", "qbittorrent", "omacut", "omakeys", "omarchy", "t3 code", "docker"}
+SPOKEN = [
+    ("turn the volume down", "volume", {"action": "down"}),
+    ("turned the volume down", "volume", {"action": "down"}),
+    ("um turn it up a bit", "volume", {"action": "up"}),
+    ("volume to fifty", "volume", {"action": "set", "value": 50}),
+    ("set volume to thirty five percent", "volume", {"action": "set", "value": 35}),
+    ("can you make it louder", "volume", {"action": "up"}),
+    ("make it a little quieter", "volume", {"action": "down"}),
+    ("volume up by ten", "volume", {"action": "up", "value": 10}),
+    ("mute", "volume", {"action": "mute"}),
+    ("unmute the sound", "volume", {"action": "unmute"}),
+    ("set the volume at seventy", "volume", {"action": "set", "value": 70}),
+    ("turn the sound off", "volume", {"action": "mute"}),
+    ("lower the volume please", "volume", {"action": "down"}),
+    ("volume down twenty percent", "volume", {"action": "down", "value": 20}),
+    ("turn it down a little bit", "volume", {"action": "down"}),
+    ("set the volume to one hundred", "volume", {"action": "set", "value": 100}),
+    ("open firefox", "launch_or_focus", {"app": "firefox"}),
+    ("open fire folks", "launch_or_focus", {"app": "firefox"}),
+    ("launch spot if i", "launch_or_focus", {"app": "spotify"}),
+    ("uh open up chromium", "launch_or_focus", {"app": "chromium"}),
+    ("start obsidion", "launch_or_focus", {"app": "obsidian"}),
+    ("open dis cord", "launch_or_focus", {"app": "discord"}),
+    ("open the terminal", "launch_or_focus", {"app": "terminal"}),
+    ("switch to firefox", "launch_or_focus", {"app": "firefox"}),
+    ("open whats app", "launch_or_focus", {"app": "whatsapp"}),
+    ("open ghost tea", "launch_or_focus", {"app": "ghostty"}),
+    ("open moon light", "launch_or_focus", {"app": "moonlight"}),
+    ("okay hark open the browser", "launch_or_focus", {"app": "browser"}),
+    ("go to workspace three", "switch_workspace", {"n": 3}),
+    ("workspace two", "switch_workspace", {"n": 2}),
+    ("switch to desktop number four", "switch_workspace", {"n": 4}),
+    ("move this window to workspace five", "move_window_to_workspace", {"n": 5}),
+    ("send it to desktop one", "move_window_to_workspace", {"n": 1}),
+    ("go to the third workspace", "switch_workspace", {"n": 3}),
+    ("switch to workspace to", "switch_workspace", {"n": 2}),
+    ("workspace for", "switch_workspace", {"n": 4}),
+    ("next song", "media", {"action": "next"}),
+    ("skip", "media", {"action": "next"}),
+    ("play the previous song", "media", {"action": "previous"}),
+    ("pause the music", "media", {"action": "pause"}),
+    ("resume", "media", {"action": "play"}),
+    ("play music", "media", {"action": "play"}),
+    ("what song is this", "media", {"action": "now_playing"}),
+    ("whats playing", "media", {"action": "now_playing"}),
+    ("next track please", "media", {"action": "next"}),
+    ("what time is it", "current_time", {"part": "time"}),
+    ("um what time is it right now", "current_time", {"part": "time"}),
+    ("whats todays date", "current_time", {"part": "date"}),
+    ("what day is it today", "current_time", {"part": "date"}),
+    ("take a screenshot", "screenshot", {}),
+    ("grab a screen shot", "screenshot", {}),
+    ("lock the screen", "lock_screen", {}),
+    ("lock my computer", "lock_screen", {}),
+    ("full screen", "toggle_fullscreen", {}),
+    ("make this window full screen", "toggle_fullscreen", {}),
+    ("whats on my clipboard", "clipboard_get", {}),
+    ("stop", "stop", {}),
+    ("never mind", "stop", {}),
+    ("shut up", "stop", {}),
+    ("hey hark uh stop talking", "stop", {}),
+]
+SPOKEN_NEGATIVE = [
+    "whats the weather like today", "tell me a joke", "how loud is a jet engine", "can you open the window",
+    "what time does the store close", "what day is christmas this year", "play a song by queen",
+    "turn the lights off", "remember to buy milk", "set a timer for ten minutes", "what is the volume of a sphere",
+    "how do i lock my car", "next time remind me", "i love firefox", "what is firefox", "who made spotify",
+    "take me home", "stop the war", "pause for a moment and think", "switch to decaf", "open a new tab",
+    "go to sleep", "what is two plus two", "its a moot point", "date night ideas", "how are you", "good morning",
+    "thanks", "open sesame", "start a timer", "open fire", "launch the rocket", "show me a picture of a cat",
+    "focus on your breathing", "start over", "open the door", "go to google", "run a mile",
+    "open the pod bay doors", "start the car",
+]
+
+
+@pytest.fixture
+def spoken_apps(monkeypatch):
+    from hark import router
+
+    monkeypatch.setattr(router, "_APPS", set(SPOKEN_APPS))
+    monkeypatch.setattr(router, "_INDEX", None)
+
+
+@pytest.mark.parametrize(("text", "tool", "args"), SPOKEN)
+def test_spoken_command(spoken_apps, text, tool, args):
+    r = route(text)
+    assert r is not None, text
+    assert (r.tool, r.args) == (tool, args)
+
+
+@pytest.mark.parametrize("text", SPOKEN_NEGATIVE)
+def test_spoken_conversation_is_left_to_the_talker(spoken_apps, text):
+    assert route(text) is None
+
+
+@pytest.mark.parametrize("text", ["open spot", "open fire", "open what", "switch to decaf", "start the car",
+                                  "open steam", "open slack", "open hay", "open sesame"])
+def test_fuzzy_app_match_never_guesses_at_plain_words(spoken_apps, text):
+    assert route(text) is None
+
+
+def test_spoken_table_sizes():
+    assert len(SPOKEN) >= 60 and len(SPOKEN_NEGATIVE) >= 40
+
+
+def test_sound_key():
+    from hark.router import sound_key
+
+    assert sound_key("fire folks") == "frflks" and sound_key("firefox") == "frfks"
+    assert sound_key("spot if i") == sound_key("spotify")
+
+
+def test_spoken_speed(spoken_apps):
+    phrases = [p[0] for p in SPOKEN] + SPOKEN_NEGATIVE
+    route("open fire folks")  # builds the app index once
+    worst = 0.0
+    for _ in range(5):
+        for p in phrases:
+            t = time.perf_counter()
+            route(p)
+            worst = max(worst, (time.perf_counter() - t) * 1000)
+    assert worst < 2

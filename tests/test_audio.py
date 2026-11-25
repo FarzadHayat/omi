@@ -214,3 +214,43 @@ async def test_pipewire_out_is_reusable_and_stop_is_idempotent(null_sink):
     await out.start(24000)
     await out.stop()
     await out.stop()
+
+
+# --- no speaker or microphone: a clear error, not silent success ---
+
+
+@pytest.fixture
+def no_devices(tmp_path, monkeypatch):
+    """pw-cat and pw-record stand-ins that fail the way PipeWire does with no device."""
+    for name in ("pw-cat", "pw-record"):
+        exe = tmp_path / name
+        exe.write_text("#!/bin/sh\necho 'stream node 1 error: no target node available' >&2\nexit 1\n")
+        exe.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}:{__import__('os').environ['PATH']}")
+
+
+async def test_playback_with_no_speaker_raises(no_devices):
+    out = PipeWireOut()
+    await out.start(16000)
+    await out.write(np.zeros(1600, np.float32))
+    with pytest.raises(RuntimeError, match="no audio output device"):
+        await out.drain()
+    assert "no target node" in out.error
+
+
+async def test_recording_with_no_microphone_reports_why(no_devices):
+    mic = PipeWireIn()
+    await mic.start()
+    await asyncio.sleep(0.2)
+    pcm = await mic.stop()
+    assert len(pcm) == 0 and "no microphone device" in mic.error
+
+
+async def test_turn_with_no_speaker_reports_an_error(no_devices, tmp_path):
+    from hark.session import Session
+    from tests.fakes import FakeBrain, FakeRouter, FakeSTT, FakeTTS, make_registry
+
+    s = Session(stt=FakeSTT(), tts=FakeTTS(), brain=FakeBrain(), registry=make_registry(), router=FakeRouter(),
+                out=PipeWireOut(), state_dir=tmp_path)
+    res = await s.run_turn("hello")
+    assert res.reply == "Okay." and res.error and "no audio output device" in res.error

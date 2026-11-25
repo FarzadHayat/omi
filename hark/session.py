@@ -4,6 +4,11 @@ A turn is: audio -> STT (thread) or text -> router; a router hit runs one tool a
 speaks a short ack, anything else goes to the brain, whose text is cut into clauses
 and synthesised (thread) while earlier clauses play. Everything is cancellable so the
 user can talk over the assistant.
+
+Audio arrives either whole (run_turn with pcm) or as it is captured:
+begin_utterance(), feed_audio() for every chunk, end_utterance(). A streaming STT
+engine decodes the chunks while the user is still talking, so the text is ready
+shortly after they stop. Push-to-talk, wav files and remote devices all use this path.
 """
 
 from __future__ import annotations
@@ -15,6 +20,7 @@ import re
 import threading
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -54,17 +60,38 @@ CANCEL_BUDGET_S = 0.08  # stop() waits at most this long for the turn to wind do
 # costs about 100 ms of silence; 5 words still sounds natural.
 FIRST_CHUNK_WORDS = 5
 SORRY = "Sorry, something went wrong."
+CANCELLED_NOTE = "Okay, I cancelled that."
+NO_AUDIO = "No audio came in. Is a microphone connected?"
+STT_SLOTS = 2  # transcriptions at once: a stale one that cannot be stopped, plus the current one
 
-_NO = re.compile(r"\b(no|nope|cancel|stop|do not|don't|dont)\b")
-_YES = re.compile(r"\b(yes|yeah|yep|yup|do it|go ahead|confirm|confirmed)\b")
+_NO = re.compile(r"\b(no|nope|nah|cancel|stop|abort|don't|dont|do not|not|never mind|nevermind|wait|hold on)\b")
+_YES_WORDS = {"yes", "yeah", "yep", "yup", "confirm", "confirmed", "please", "do-it", "go-ahead", "go-for-it"}
+_YES_CORE = _YES_WORDS - {"please"}
+ANSWER_MAX_WORDS = 6
+
+
+def parse_answer(text: str) -> bool | None:
+    """A spoken answer to a yes/no question: True for a clear yes, False for a clear no,
+    None for anything else (a question, a hedge, a new request). Only a short reply made
+    of yes words counts as yes."""
+    t = text.lower().replace("’", "'").strip()
+    if "?" in t:
+        return None
+    words = re.findall(r"[a-z']+", t)
+    if not words:
+        return None
+    if _NO.search(t) and len(words) <= ANSWER_MAX_WORDS:
+        return False
+    joined = re.sub(r"\b(do it|go ahead|go for it)\b", lambda m: m.group(0).replace(" ", "-"), " ".join(words))
+    tokens = joined.split()
+    if len(tokens) <= ANSWER_MAX_WORDS and set(tokens) <= _YES_WORDS and set(tokens) & _YES_CORE:
+        return True
+    return None
 
 
 def parse_yes_no(text: str) -> bool:
-    """A spoken confirmation answer. Only a clear yes counts; a no wins over a yes."""
-    t = text.lower().replace("’", "'")
-    if _NO.search(t):
-        return False
-    return bool(_YES.search(t))
+    """True only for a clear yes."""
+    return parse_answer(text) is True
 
 
 @dataclass
@@ -95,19 +122,21 @@ class _Speaker:
         self.out = out
         self.quiet = quiet
         self.on_first = on_first
-        self.queued: list[str] = []
-        self.spoken: list[str] = []
-        self._q: asyncio.Queue[str | None] = asyncio.Queue()
+        self.queued: list[str] = []  # the reply, for the transcript
+        self.spoken: list[str] = []  # the part of the reply that was heard
+        self._q: asyncio.Queue[tuple[str, bool] | None] = asyncio.Queue()
         self._abort = threading.Event()
         self._opened = False
         self._cancelled = False
         self._first_done = False
         self._task = asyncio.create_task(self._run())
 
-    def say(self, text: str) -> None:
+    def say(self, text: str, record: bool = True) -> None:
+        """Queue text to speak. record=False keeps it out of the reply (a yes/no question)."""
         if text and not self._cancelled:
-            self.queued.append(text)
-            self._q.put_nowait(text)
+            if record:
+                self.queued.append(text)
+            self._q.put_nowait((text, record))
 
     async def finish(self) -> None:
         """Wait until everything queued has been played."""
@@ -135,9 +164,11 @@ class _Speaker:
                 await self.on_first()
 
     async def _run(self) -> None:
-        while (text := await self._q.get()) is not None:
+        while (item := await self._q.get()) is not None:
+            text, record = item
             if self.quiet:
-                self.spoken.append(text)
+                if record:
+                    self.spoken.append(text)
                 await self._first()
                 continue
             heard = False
@@ -148,7 +179,8 @@ class _Speaker:
                 await self.out.write(pcm)
                 if not heard:
                     heard = True
-                    self.spoken.append(text)
+                    if record:
+                        self.spoken.append(text)
                     await self._first()
 
     async def _synth(self, text: str) -> AsyncIterator[np.ndarray]:
@@ -189,6 +221,35 @@ class _Turn:
     speaker: _Speaker | None = None
     cancelled: bool = False
     trace: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class _Utterance:
+    """Audio of one utterance as it comes in."""
+
+    started: float  # monotonic time speech started
+    stt: STT
+    streaming: bool
+    chunks: list[np.ndarray] = field(default_factory=list)
+    samples: int = 0
+    feeds: list[Future[Any]] = field(default_factory=list)
+
+
+@dataclass
+class _Question:
+    id: str
+    question: str
+    detail: str
+    asked_at: float  # monotonic
+    future: asyncio.Future[bool]
+    reasked: bool = False
+
+
+Listen = Callable[[], Awaitable[str]]
+
+
+def is_streaming(stt: Any) -> bool:
+    return all(callable(getattr(stt, m, None)) for m in ("start", "feed", "finish"))
 
 
 class Session:
@@ -234,7 +295,13 @@ class Session:
         self.last_timing: dict[str, Any] | None = None
         self._turn: _Turn | None = None
         self._start_lock = asyncio.Lock()
-        self._confirm: asyncio.Future[bool] | None = None
+        self._question: _Question | None = None
+        self._utt: _Utterance | None = None
+        # Stateless engines (Moonshine) take two calls at once; a streaming engine keeps
+        # one utterance's state, so all its calls go through one thread, in order.
+        self._stt_pool = ThreadPoolExecutor(STT_SLOTS, thread_name_prefix="hark-stt")
+        self._stt_serial = ThreadPoolExecutor(1, thread_name_prefix="hark-stt-stream")
+        self._stt_slots = asyncio.Semaphore(STT_SLOTS)
         self._narration: asyncio.Task[None] | None = None
         self._pending_done: list[str] = []
         self._last_progress = -1e9
@@ -255,6 +322,8 @@ class Session:
             task.cancel()
         await asyncio.gather(*self._loops, return_exceptions=True)
         self._loops.clear()
+        self._stt_pool.shutdown(wait=False, cancel_futures=True)
+        self._stt_serial.shutdown(wait=False, cancel_futures=True)
 
     # --- turns -------------------------------------------------------------------
 
@@ -266,20 +335,117 @@ class Session:
         out: AudioOut | None = None,
         quiet: bool = False,
         sink: EmitFn | None = None,
+        started: float | None = None,
     ) -> TurnResult:
         """Run one turn from text or 16 kHz audio. A running turn is cancelled first
-        (barge-in), unless a confirmation is pending: then this turn is the answer."""
-        t0 = perf_counter()
+        (barge-in), unless a yes/no question is pending: then a clear yes or no answers
+        it, and anything else cancels it and runs as a turn of its own. `started` is the
+        monotonic time the user began speaking (default: now)."""
+        listen = (lambda: self._transcribe(pcm)) if pcm is not None else None
+        return await self._turn_from(text, listen, out=out, quiet=quiet, sink=sink, started=started)
+
+    async def _turn_from(
+        self,
+        text: str | None,
+        listen: Listen | None,
+        *,
+        out: AudioOut | None,
+        quiet: bool,
+        sink: EmitFn | None,
+        started: float | None,
+        t0: float | None = None,
+    ) -> TurnResult:
+        t0 = perf_counter() if t0 is None else t0
+        started = monotonic() if started is None else started
         self._last_activity = monotonic()
-        if self._confirm is not None and not self._confirm.done():
-            return await self._answer_by_voice(text, pcm, t0, sink)
+        note, stt_ms = "", None
+        if self._question is not None and not self._question.future.done():
+            answered, text, stt_ms = await self._answer_by_voice(text, listen, t0, sink, started)
+            if answered is not None:
+                return answered
+            listen, note = None, CANCELLED_NOTE
         async with self._start_lock:
             await self.stop()
             turn = _Turn(sink=sink)
             self._turn = turn
-            turn.task = asyncio.create_task(self._run(turn, text, pcm, out or self.out, quiet, t0))
+            turn.task = asyncio.create_task(
+                self._run(turn, text, listen, out or self.out, quiet, t0, note=note, stt_ms=stt_ms))
         # Shielded: a client hanging up does not cancel the turn; stop() does.
         return await asyncio.shield(turn.task)
+
+    # --- audio as it is captured ---------------------------------------------------
+
+    async def begin_utterance(self) -> None:
+        """The user starts speaking (push-to-talk pressed, or a remote device starts
+        sending audio). Talks over the assistant, unless a yes/no question is waiting."""
+        if self._question is None or self._question.future.done():
+            await self.stop()
+        stt = self.stt
+        utt = _Utterance(monotonic(), stt, is_streaming(stt))
+        if utt.streaming:
+            utt.feeds.append(self._stt_serial.submit(stt.start))
+        self._utt = utt
+        await self.set_listening(True)
+
+    def feed_audio(self, pcm: np.ndarray) -> None:
+        """Add captured audio (float32 mono 16 kHz) to the open utterance. Returns at once;
+        a streaming engine decodes it in its thread meanwhile."""
+        utt = self._utt
+        if utt is None:
+            return
+        pcm = np.asarray(pcm, dtype=np.float32).reshape(-1)
+        if not len(pcm):
+            return
+        utt.samples += len(pcm)
+        if utt.streaming:
+            utt.feeds.append(self._stt_serial.submit(utt.stt.feed, pcm))
+            utt.feeds = [f for f in utt.feeds if not f.done() or f.exception() is not None]
+        else:
+            utt.chunks.append(pcm)
+
+    async def cancel_utterance(self) -> None:
+        """Drop the open utterance without running a turn (the stop key while listening)."""
+        self._utt = None
+        await self.set_listening(False)
+
+    async def end_utterance(
+        self, *, out: AudioOut | None = None, quiet: bool = False, sink: EmitFn | None = None
+    ) -> TurnResult:
+        """The user stopped speaking: finish the text and run the turn. Timing starts here."""
+        t0 = perf_counter()
+        utt, self._utt = self._utt, None
+        await self.set_listening(False)
+        if utt is None or utt.samples == 0:
+            error = "no utterance was started" if utt is None else NO_AUDIO
+            return TurnResult(reply="", user_text="", timing={"path": None}, error=error)
+        if utt.streaming:
+            async def listen() -> str:
+                failed = [f.exception() for f in utt.feeds if f.done() and f.exception() is not None]
+                if failed:
+                    raise failed[0]
+                return await asyncio.shield(asyncio.wrap_future(self._stt_serial.submit(utt.stt.finish)))
+        else:
+            pcm = np.concatenate(utt.chunks)
+
+            async def listen() -> str:
+                return await self._transcribe(pcm, utt.stt)
+        return await self._turn_from(None, listen, out=out, quiet=quiet, sink=sink, started=utt.started, t0=t0)
+
+    async def _transcribe(self, pcm: np.ndarray, stt: STT | None = None) -> str:
+        """Whole-utterance STT in a thread. A thread cannot be stopped, so a barge-in
+        leaves at most one stale transcription running; one still waiting is dropped."""
+        stt = stt or self.stt
+        if is_streaming(stt):
+            return await asyncio.shield(asyncio.wrap_future(self._stt_serial.submit(stt.transcribe, pcm)))
+        await self._stt_slots.acquire()  # a barge-in cancels the wait: nothing started
+        loop = asyncio.get_running_loop()
+        try:
+            job = self._stt_pool.submit(stt.transcribe, pcm)
+        except BaseException:
+            self._stt_slots.release()
+            raise
+        job.add_done_callback(lambda _: loop.call_soon_threadsafe(self._stt_slots.release))
+        return await asyncio.shield(asyncio.wrap_future(job))
 
     async def set_listening(self, on: bool) -> None:
         """Push-to-talk: show that the microphone is open (or closed again)."""
@@ -290,7 +456,7 @@ class Session:
 
     async def stop(self) -> None:
         """Cut speech and cancel the running turn, confirmation and narration."""
-        self._resolve_confirm(False)
+        self.answer(False)
         waits: list[asyncio.Future[Any]] = []
         if self._narration is not None and not self._narration.done():
             self._narration.cancel()
@@ -313,17 +479,20 @@ class Session:
         self,
         turn: _Turn,
         text: str | None,
-        pcm: np.ndarray | None,
+        listen: Listen | None,
         out: AudioOut,
         quiet: bool,
         t0: float,
+        note: str = "",
+        stt_ms: float | None = None,
     ) -> TurnResult:
         timing: dict[str, Any] = {
-            "stt_ms": None,
+            "stt_ms": stt_ms,
             "route_ms": None,
             "first_text_ms": None,
             "first_audio_ms": None,
             "action_ms": None,
+            "brain_done_ms": None,
             "total_ms": None,
             "path": None,
         }
@@ -343,13 +512,15 @@ class Session:
         speaker: _Speaker | None = None
         try:
             await self._set_state(State.THINKING, turn)
-            if pcm is not None:
-                user_text = (await asyncio.to_thread(self.stt.transcribe, pcm)).strip()
+            if listen is not None:
+                user_text = (await listen()).strip()
                 timing["stt_ms"] = ms()
             if user_text:
                 await self._emit_turn(turn, transcript("user", user_text))
                 speaker = _Speaker(self.tts, out, quiet, on_first)
                 turn.speaker = speaker
+                if note:
+                    speaker.say(note, record=False)
                 route = self._route(user_text)
                 timing["route_ms"] = ms()
                 if route is not None:
@@ -358,8 +529,9 @@ class Session:
                 else:
                     timing["path"] = "talker"
                     error = await self._run_brain(turn, user_text, speaker, timing, ms)
-                timing["total_ms"] = ms()
+                timing["brain_done_ms"] = ms()
                 await speaker.finish()
+                timing["total_ms"] = ms()
         except asyncio.CancelledError:
             turn.cancelled = True
             task = asyncio.current_task()
@@ -506,58 +678,91 @@ class Session:
 
     # --- confirmation ------------------------------------------------------------
 
-    async def confirm(self, question: str) -> bool:
-        """The registry's ConfirmFn: ask aloud, wait for a yes or no. Timeout is no."""
-        if self._confirm is not None and not self._confirm.done():
+    async def confirm(self, question: str, detail: str = "") -> bool:
+        """The registry's ConfirmFn: ask aloud, wait for a yes or no. Timeout is no.
+        `detail` (a full command, say) is shown on screen, not spoken."""
+        if self._question is not None and not self._question.future.done():
             return False  # one question at a time; a second one is refused
         fut: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
-        self._confirm = fut
+        q = self._question = _Question(uuid.uuid4().hex[:12], question, detail, monotonic(), fut)
         turn = self._turn
         before = self.state
         await self._set_state(State.CONFIRMING, turn)
-        await self._emit_turn(turn, {"event": "confirm_request", "question": question})
-        if turn is not None and turn.speaker is not None:
-            turn.speaker.say(question)
-        else:
-            self._narrate(question)
+        event = {"event": "confirm_request", "question": question, "id": q.id}
+        if detail:
+            event["detail"] = detail
+        await self._emit_turn(turn, event)
+        self._ask_aloud(question)
         try:
             return await asyncio.wait_for(asyncio.shield(fut), self.confirm_timeout)
         except TimeoutError:
             return False
         finally:
-            if self._confirm is fut:
-                self._confirm = None
+            if self._question is q:
+                self._question = None
             if self.state is State.CONFIRMING:
                 back = before if before is not State.CONFIRMING else State.IDLE
                 if self._turn is None:
                     back = State.IDLE
                 await self._set_state(back, self._turn)
 
-    def answer(self, yes: bool) -> bool:
-        """Answer the pending confirmation. Returns False when nothing was pending."""
-        return self._resolve_confirm(yes)
+    def _ask_aloud(self, text: str) -> None:
+        turn = self._turn
+        if turn is not None and turn.speaker is not None and turn.task is not None and not turn.task.done():
+            turn.speaker.say(text, record=False)
+        else:
+            self._narrate(text)
 
-    def _resolve_confirm(self, yes: bool) -> bool:
-        fut = self._confirm
-        if fut is None or fut.done():
+    @property
+    def pending_confirm(self) -> dict[str, str] | None:
+        q = self._question
+        if q is None or q.future.done():
+            return None
+        return {"id": q.id, "question": q.question, "detail": q.detail}
+
+    def answer(self, yes: bool, confirm_id: str | None = None) -> bool:
+        """Answer the pending question. With confirm_id, only that exact question is
+        answered, so a stale yes never approves a newer one. False when nothing matched."""
+        q = self._question
+        if q is None or q.future.done() or (confirm_id is not None and confirm_id != q.id):
             return False
-        fut.set_result(yes)
+        q.future.set_result(yes)
         return True
 
     async def _answer_by_voice(
-        self, text: str | None, pcm: np.ndarray | None, t0: float, sink: EmitFn | None
-    ) -> TurnResult:
+        self, text: str | None, listen: Listen | None, t0: float, sink: EmitFn | None, started: float
+    ) -> tuple[TurnResult | None, str, float | None]:
+        """A turn while a question waits. Returns (result, text, stt_ms); result None
+        means the words were not an answer: the question is cancelled and they run as
+        a normal turn."""
         timing: dict[str, Any] = {"stt_ms": None, "total_ms": None, "path": "confirm"}
         user_text = (text or "").strip()
-        if pcm is not None:
-            user_text = (await asyncio.to_thread(self.stt.transcribe, pcm)).strip()
+        if listen is not None:
+            user_text = (await listen()).strip()
             timing["stt_ms"] = round((perf_counter() - t0) * 1000, 1)
+        q = self._question
+        if q is None or q.future.done():  # answered or timed out while we listened
+            return None, user_text, timing["stt_ms"]
         tmp = _Turn(sink=sink)
         if user_text:
             await self._emit_turn(tmp, transcript("user", user_text))
-        self.answer(parse_yes_no(user_text))
+        answer = parse_answer(user_text)
+        words = len(user_text.split())
+        if started < q.asked_at and (answer is not None or not user_text):
+            # Spoken before this question was asked: meant for something else.
+            self._ask_aloud(q.question)
+        elif answer is not None:
+            self.answer(answer, q.id)
+        elif user_text and (words > 3 or "?" in user_text):
+            self.answer(False, q.id)  # a new request or a question: cancel, then run it
+            return None, user_text, timing["stt_ms"]
+        elif not q.reasked:
+            q.reasked = True
+            self._ask_aloud(f"Please say yes or no. {q.question}")
+        else:
+            self.answer(False, q.id)
         timing["total_ms"] = round((perf_counter() - t0) * 1000, 1)
-        return TurnResult(reply="", user_text=user_text, timing=timing)
+        return TurnResult(reply="", user_text=user_text, timing=timing), user_text, timing["stt_ms"]
 
     # --- background worker narration ---------------------------------------------
 
@@ -629,15 +834,17 @@ class Session:
             ):
                 self.end_session()
 
-    def end_session(self) -> None:
-        """Close this conversation and start a fresh one with no history."""
+    def end_session(self) -> asyncio.Future[Any] | None:
+        """Close this conversation and start a fresh one with no history. Returns the
+        after-session job, or None for an empty session."""
         sid, lines = self.session_id, self.transcript
         self.session_id = _new_session_id()
         self.history = []
         self.transcript = []
         if self.on_session_end is not None and lines:
             text = "\n".join(f"{m['role']}: {m['content']}" for m in lines)
-            self._spawn(_quietly(self.on_session_end(sid, text)))
+            return self._spawn(_quietly(self.on_session_end(sid, text)))
+        return None
 
     # --- events ------------------------------------------------------------------
 
@@ -664,10 +871,11 @@ class Session:
             except Exception:
                 log.exception("emit failed")
 
-    def _spawn(self, coro: Awaitable[Any]) -> None:
+    def _spawn(self, coro: Awaitable[Any]) -> asyncio.Future[Any]:
         task = asyncio.ensure_future(coro)
         self._bg.add(task)
         task.add_done_callback(self._bg.discard)
+        return task
 
 
 def transcript(role: str, text: str) -> dict[str, Any]:

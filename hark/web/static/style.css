@@ -1,0 +1,308 @@
+/* Dark neutral palette; /theme.css overrides the base colours with the active Omarchy theme. */
+:root {
+  color-scheme: dark;
+  --bg: #141416;
+  --bg-deep: #0c0c0e;
+  --surface: #232326;
+  --fg: #ececf0;
+  --muted: #9a9aa2;
+  --accent: #6ea8fe;
+  --red: #ff6b6b;
+  --green: #4cd479;
+  --yellow: #f2c94c;
+  --orange: #f5a35b;
+  --blue: #6ea8fe;
+  --magenta: #c792ea;
+  --cyan: #7fd8f0;
+  --target: 48px;
+  --talk: clamp(112px, 32vmin, 176px);
+  --gutter: 16px;
+}
+
+* { box-sizing: border-box; }
+
+html, body { margin: 0; block-size: 100%; }
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font: 1rem/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  overflow-wrap: break-word;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.sr-only {
+  position: absolute; inline-size: 1px; block-size: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+
+:where(a, button, input, [tabindex]):focus-visible {
+  outline: 3px solid var(--fg);
+  outline-offset: 3px;
+}
+
+button, input { font: inherit; color: inherit; }
+
+button {
+  min-block-size: var(--target);
+  min-inline-size: var(--target);
+  cursor: pointer;
+  border-radius: 999px;
+  transition: scale 120ms ease-out, background-color 150ms ease-out, box-shadow 150ms ease-out;
+}
+button:active { scale: 0.97; }
+
+/* --- layout --- */
+
+.app {
+  --state: var(--muted);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto auto auto;
+  grid-template-areas: "bar" "log" "confirm" "controls" "compose";
+  gap: 12px;
+  block-size: 100vh;
+  block-size: 100dvh;
+  max-inline-size: 48rem;
+  margin-inline: auto;
+  padding:
+    max(12px, env(safe-area-inset-top, 0px))
+    max(var(--gutter), env(safe-area-inset-right, 0px))
+    max(12px, env(safe-area-inset-bottom, 0px))
+    max(var(--gutter), env(safe-area-inset-left, 0px));
+}
+
+.bar {
+  grid-area: bar;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.bar h1 { margin: 0; font-size: 1.125rem; font-weight: 600; letter-spacing: 0.01em; }
+
+/* --- state indicator: shape, text and colour --- */
+
+.state {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  min-block-size: 36px;
+  padding: 4px 14px 4px 12px;
+  border: 1px solid color-mix(in srgb, var(--state) 55%, transparent);
+  border-radius: 999px;
+  color: var(--state);
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+.shape {
+  inline-size: 14px;
+  block-size: 14px;
+  flex: none;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+}
+
+.app[data-state="idle"] { --state: var(--muted); }
+.app[data-state="listening"] { --state: var(--red); }
+.app[data-state="listening"] .shape { background: currentColor; }
+.app[data-state="thinking"] { --state: var(--blue); }
+.app[data-state="thinking"] .shape { border-top-color: transparent; }
+.app[data-state="speaking"] { --state: var(--green); }
+.app[data-state="speaking"] .shape {
+  border: 0; border-radius: 1px;
+  background: linear-gradient(currentColor, currentColor) 0 50% / 3px 60% no-repeat,
+              linear-gradient(currentColor, currentColor) 50% 50% / 3px 100% no-repeat,
+              linear-gradient(currentColor, currentColor) 100% 50% / 3px 60% no-repeat;
+}
+.app[data-state="acting"] { --state: var(--orange); }
+.app[data-state="acting"] .shape { border-radius: 2px; background: currentColor; }
+.app[data-state="confirming"] { --state: var(--yellow); }
+.app[data-state="confirming"] .shape { border-radius: 2px; rotate: 45deg; scale: 0.85; background: currentColor; }
+.app:is([data-state="offline"], [data-state="connecting"]) .shape { border-style: dashed; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .app[data-state="thinking"] .shape { animation: spin 0.9s linear infinite; }
+  .app[data-state="listening"] .shape { animation: beat 1.2s ease-in-out infinite; }
+}
+@keyframes spin { to { rotate: 1turn; } }
+@keyframes beat { 50% { scale: 0.7; } }
+
+/* --- transcript --- */
+
+.log {
+  grid-area: log;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-radius: 12px;
+  scroll-padding-block: 12px;
+}
+.log ol {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.log li {
+  max-inline-size: 85%;
+  padding: 10px 14px;
+  border-radius: 16px;
+  text-wrap: pretty;
+}
+.log li.user {
+  align-self: flex-end;
+  background: color-mix(in srgb, var(--accent) 22%, var(--surface));
+  border-end-end-radius: 4px;
+}
+.log li.assistant {
+  align-self: flex-start;
+  background: var(--surface);
+  border-end-start-radius: 4px;
+}
+.log li.note {
+  align-self: center;
+  max-inline-size: 100%;
+  padding: 2px 8px;
+  color: var(--muted);
+  font-size: 0.875rem;
+  text-align: center;
+}
+.log li.error { color: var(--red); }
+
+/* --- confirmation --- */
+
+.confirm {
+  grid-area: confirm;
+  padding: 14px;
+  border-radius: 16px;
+  background: var(--surface);
+  border: 2px solid var(--yellow);
+}
+.confirm[hidden] { display: none; }
+.confirm .question { margin: 0 0 4px; font-weight: 600; }
+.confirm .detail {
+  margin: 0 0 4px;
+  color: var(--muted);
+  font: 0.875rem/1.4 ui-monospace, "SF Mono", Menlo, monospace;
+  overflow-wrap: anywhere;
+  max-block-size: 6.5em;
+  overflow-y: auto;
+}
+.answers {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-block-start: 10px;
+}
+.answers button {
+  min-block-size: 56px;
+  border: 0;
+  font-weight: 700;
+  font-size: 1.125rem;
+  color: var(--bg-deep);
+}
+.answers .yes { background: var(--green); }
+.answers .no { background: var(--red); }
+
+/* --- talk and stop --- */
+
+.controls {
+  grid-area: controls;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 16px;
+  padding-block: 4px;
+}
+.talk {
+  grid-column: 2;
+  inline-size: var(--talk);
+  block-size: var(--talk);
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--bg-deep);
+  font-size: 1.25rem;
+  font-weight: 700;
+  box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 22%, transparent);
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+.talk[aria-pressed="true"] {
+  background: var(--red);
+  box-shadow: 0 0 0 10px color-mix(in srgb, var(--red) 30%, transparent);
+}
+.talk:disabled { opacity: 0.45; cursor: not-allowed; }
+.stop {
+  grid-column: 3;
+  justify-self: start;
+  padding-inline: 22px;
+  background: transparent;
+  border: 1.5px solid color-mix(in srgb, var(--fg) 35%, transparent);
+  font-weight: 600;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .talk[aria-pressed="true"] { animation: ring 1.4s ease-in-out infinite; }
+}
+@keyframes ring {
+  50% { box-shadow: 0 0 0 16px color-mix(in srgb, var(--red) 18%, transparent); }
+}
+
+/* --- typed message --- */
+
+.compose {
+  grid-area: compose;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+.compose input {
+  min-block-size: var(--target);
+  min-inline-size: 0;
+  padding: 0 18px;
+  border-radius: 999px;
+  border: 1.5px solid color-mix(in srgb, var(--fg) 22%, transparent);
+  background: var(--surface);
+  font-size: 1rem;
+}
+.compose button {
+  padding-inline: 20px;
+  border: 0;
+  background: var(--surface);
+  font-weight: 600;
+}
+
+/* Phone held sideways: transcript on the left, voice controls on the right. */
+@media (orientation: landscape) and (max-height: 560px) {
+  .app {
+    --talk: clamp(96px, 30vh, 140px);
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto minmax(0, 1fr) auto auto;
+    grid-template-areas: "bar controls" "log controls" "confirm controls" "compose controls";
+    max-inline-size: none;
+    column-gap: 20px;
+  }
+  .controls {
+    grid-template-columns: auto;
+    grid-template-rows: auto auto;
+    justify-items: center;
+    align-content: center;
+  }
+  .talk, .stop { grid-column: 1; }
+  .stop { justify-self: center; }
+}
+
+/* Tablet and desktop: roomier talk button. */
+@media (min-width: 700px) and (min-height: 700px) {
+  :root { --talk: clamp(140px, 22vmin, 200px); --gutter: 24px; }
+  .log li { max-inline-size: 75%; }
+}
+
+@media (forced-colors: active) {
+  .talk, .answers button { border: 2px solid ButtonText; }
+}

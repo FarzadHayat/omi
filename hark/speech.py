@@ -27,7 +27,8 @@ class ClauseChunker:
 
     The first chunk ends at the first clause boundary (or after `first_words` words)
     so audio starts early. Later chunks end at sentence ends, which sound more
-    natural; a very long sentence still breaks at a clause after `max_words` words.
+    natural; a very long sentence still breaks at a clause after `max_words` words,
+    or at a word after `max_words` words when it has no clause marks at all.
     Fenced code blocks are dropped, since they are never worth reading aloud.
     """
 
@@ -131,6 +132,12 @@ class ClauseChunker:
                 i = j
                 continue
             i += 1
+        if word_cut is None:
+            # A run-on with no usable boundary: speak it in max_words pieces rather than
+            # leaving the user in silence until the model finishes.
+            for n, m in enumerate(_WORD.finditer(buf), 1):
+                if n == self.max_words:
+                    return m.end()
         return word_cut
 
     @staticmethod

@@ -101,3 +101,10 @@ def test_clean_keeps_plain_text_and_identifiers():
     assert clean_for_speech("Plain text, nothing to do.") == "Plain text, nothing to do."
     assert clean_for_speech("open file_name now") == "open file name now"
     assert clean_for_speech("mail me@example.com") == "mail me at example.com"
+
+
+def test_run_on_text_is_spoken_in_pieces():
+    c = ClauseChunker()
+    first = c.feed("Sure. ")
+    rest = c.feed("word " * 80)
+    assert first == ["Sure."] and len(rest) >= 2 and all(len(x.split()) <= 30 for x in rest)

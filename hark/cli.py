@@ -21,6 +21,10 @@ class NotRunning(Exception):
     pass
 
 
+class Incomplete(Exception):
+    """The daemon closed the connection before its final reply."""
+
+
 def _connect(path: Path) -> socket.socket:
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
@@ -47,11 +51,13 @@ def request(path: Path, req: dict[str, Any]) -> Iterator[dict[str, Any]]:
                 continue
             if not streaming or msg.get("done") or not msg.get("ok", False):
                 return
+        if req["cmd"] != "subscribe":
+            raise Incomplete
 
 
 def _timing_line(t: dict[str, Any]) -> str:
     parts = [f"path={t.get('path')}"]
-    for key in ("stt_ms", "route_ms", "first_text_ms", "first_audio_ms", "action_ms", "total_ms"):
+    for key in ("stt_ms", "route_ms", "first_text_ms", "first_audio_ms", "action_ms", "brain_done_ms", "total_ms"):
         if t.get(key) is not None:
             parts.append(f"{key[:-3]}={t[key]:.0f}ms")
     return "timing: " + " ".join(parts)
@@ -67,6 +73,8 @@ def _print_human(msg: dict[str, Any]) -> None:
         print(f"[{msg['name']} {mark}] {msg.get('text', '')}")
     elif ev == "confirm_request":
         print(f"confirm? {msg['question']}  (answer with: hark yes / hark no)")
+        if msg.get("detail"):
+            print(f"  full command: {msg['detail']}")
     elif ev == "progress":
         print(f"... {msg['text']}")
     elif ev is None and msg.get("done"):
@@ -82,6 +90,10 @@ def _print_status(msg: dict[str, Any]) -> None:
     print(f"talker: {msg.get('talker')}  worker: {msg.get('worker')}")
     print(f"stt: {engines.get('stt')}  tts: {engines.get('tts')}")
     print(f"session: {msg.get('session_id')}")
+    if msg.get("confirm"):
+        print(f"waiting for yes or no: {msg['confirm']['question']}")
+    for name, error in (msg.get("errors") or {}).items():
+        print(f"problem with {name}: {error}")
     if msg.get("timing"):
         print(_timing_line(msg["timing"]))
 
@@ -144,6 +156,11 @@ def _parser() -> argparse.ArgumentParser:
     st.add_argument("key")
     st.add_argument("value")
     sub.add_parser("events", help="print every daemon event as JSON lines")
+    for name, what in (("install", "add the Omarchy keys, bar widget and service"),
+                       ("uninstall", "remove what hark install added")):
+        sp = sub.add_parser(name, help=what)
+        sp.add_argument("--no-activate", action="store_true",
+                        help="only write or remove the files; leave systemd, the shell and Hyprland alone")
     return p
 
 
@@ -163,14 +180,33 @@ def _run_daemon() -> int:
     return 0
 
 
+def _pending_question(path: Path) -> dict[str, Any] | None:
+    for msg in request(path, {"cmd": "status"}):
+        return msg.get("confirm")
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "daemon":
         return _run_daemon()
+    if args.command in ("install", "uninstall"):
+        from hark import install
+
+        return install.main(args.command, activate=not args.no_activate)
     path = args.socket or config.SOCKET_PATH
     req = _build_request(args)
     status = 0
     try:
+        if req["cmd"] == "confirm":
+            # Answer exactly the question that is waiting now, and say which one it was.
+            pending = _pending_question(path)
+            if pending is None:
+                print("hark: nothing to confirm", file=sys.stderr)
+                return EXIT_ERROR
+            req["id"] = pending["id"]
+            if not args.json:
+                print(f"{'yes' if req['answer'] else 'no'} to: {pending['question']}")
         for msg in request(path, req):
             if args.json or args.command == "events":
                 print(json.dumps(msg), flush=True)
@@ -188,6 +224,9 @@ def main(argv: list[str] | None = None) -> int:
         return 130
     except (ConnectionError, json.JSONDecodeError) as exc:
         print(f"hark: lost the daemon connection: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+    except Incomplete:
+        print("hark: the daemon closed the connection without an answer", file=sys.stderr)
         return EXIT_ERROR
     return status
 

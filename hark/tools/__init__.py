@@ -17,7 +17,7 @@ def build_registry(cfg: Config) -> ToolRegistry:
 
     registry = ToolRegistry()
     dry = os.environ.get("HARK_DRY_RUN") == "1"
-    for tool in [*hyprland.tools(), *media.tools(), *system.tools(), omarchy.make_tool(registry)]:
+    for tool in [*hyprland.tools(), *media.tools(), *system.tools(), omarchy.make_tool()]:
         registry.register(_dry(tool) if dry and tool.safety != "read" else tool)
     return registry
 

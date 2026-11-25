@@ -26,8 +26,11 @@ You hear the user through speech recognition and your reply is spoken aloud.
 class Brain(Protocol):
     name: str
 
-    async def start(self) -> None:
-        """Warm up (load model, open the session) so the first turn is fast."""
+    async def start(self, memory_context: str = "") -> None:
+        """Warm up (load model, open the session) so the first turn is fast.
+        memory_context is the TurnContext.memory_context the first turn will carry, so
+        the warm-up primes the exact prompt prefix and nothing restarts on turn one.
+        A brain may expose `error` (str or None): why it cannot answer right now."""
         ...
 
     def turn(self, user_text: str, ctx: TurnContext) -> AsyncIterator[BrainEvent]:

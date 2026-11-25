@@ -26,6 +26,29 @@ from hark.tools.base import NOT_CONFIRMED, ToolRegistry
 
 MAX_ROUNDS = 4
 REFUSED_REPLY = "Okay, I left it alone."
+# Every tool schema is prompt the small local model reads on a cache miss. Recall runs
+# by itself every turn, so the talker does not get it; these get shorter descriptions.
+LOCAL_SKIP = frozenset({"recall"})
+LOCAL_DESCRIPTIONS = {
+    "remember": "Save a lasting fact about the user.",
+    "forget": "Forget a saved fact.",
+    "delegate": "Hand long or multi-step work (coding, research, files, web) to the background worker.",
+}
+# A device action whose result text already says what happened ("Opening Firefox.") is
+# spoken as is. A second model round would only rephrase it, and costs about 1.4 s of
+# silence here (prompt plus a dozen tokens at 12 a second). Measured: tool-turn first
+# audio 3.6 s -> 2.3 s.
+SPEAK_RESULT = frozenset({
+    "launch_or_focus", "focus_window", "list_windows", "active_window", "switch_workspace",
+    "move_window_to_workspace", "toggle_fullscreen", "media", "volume", "screenshot",
+    "lock_screen", "current_time", "clipboard_get",
+})
+_MORE_STEPS = re.compile(r"\b(?:and|then|after|afterwards|also|plus)\b")
+# The session keeps a sliding window of history, so once it is full its first message
+# changes every turn and llama.cpp re-reads the whole history (150 to 180 tokens, about
+# 750 ms). The talker cuts the history at a fixed message instead and only moves the cut
+# when that message leaves the window, keeping this many messages.
+HISTORY_TAIL = 4
 T = TypeVar("T")
 
 _THINK = ("<think>", "</think>")
@@ -83,7 +106,12 @@ async def race(aw: Awaitable[T], cancel: asyncio.Event) -> T:
         raise Cancelled
     task = asyncio.ensure_future(aw)
     waiter = asyncio.ensure_future(cancel.wait())
-    done, _ = await asyncio.wait({task, waiter}, return_when=asyncio.FIRST_COMPLETED)
+    try:
+        done, _ = await asyncio.wait({task, waiter}, return_when=asyncio.FIRST_COMPLETED)
+    except BaseException:  # the caller itself was cancelled: take the work down with it
+        task.cancel()
+        waiter.cancel()
+        raise
     if task in done:
         waiter.cancel()
         return task.result()
@@ -103,6 +131,9 @@ class LocalBrain:
         self._server = None if cfg.base_url else LlamaServer(cfg)
         self._client: httpx.AsyncClient | None = None
         self._cancel = asyncio.Event()
+        self._memory = ""
+        self._anchor: tuple[str, dict[str, Any]] | None = None  # (session id, first history message sent)
+        self.error: str | None = None  # why the last start failed; shown in status
 
     # --- request building ---
 
@@ -135,19 +166,54 @@ class LocalBrain:
             "max_tokens": max_tokens,
         }
         if tools and self.registry.tools:
-            body["tools"] = self.registry.openai_tools()
+            body["tools"] = self._tools()
         if self._is_llama:
             body["chat_template_kwargs"] = {"enable_thinking": False}
         return body
 
+    def _tools(self) -> list[dict[str, Any]]:
+        tools = []
+        for t in self.registry.openai_tools():
+            fn = t["function"]
+            if fn["name"] in LOCAL_SKIP:
+                continue
+            if fn["name"] in LOCAL_DESCRIPTIONS:
+                fn = {**fn, "description": LOCAL_DESCRIPTIONS[fn["name"]]}
+            if not fn["parameters"].get("required", True):
+                # An empty list is 4 to 5 prompt tokens per tool, saying nothing.
+                fn = {**fn, "parameters": {k: v for k, v in fn["parameters"].items() if k != "required"}}
+            tools.append({**t, "function": fn})
+        return tools
+
+    def _history(self, ctx: TurnContext) -> list[dict[str, str]]:
+        """A tail of ctx.history that starts at the same message turn after turn, so
+        the cached prompt prefix survives the session's sliding window (see HISTORY_TAIL)."""
+        history = ctx.history
+        if self._anchor is not None and self._anchor[0] == ctx.session_id:
+            for i, m in enumerate(history):
+                if m == self._anchor[1]:
+                    return history[i:]
+            history = history[-HISTORY_TAIL:]  # the old start left the window: move the cut
+        while history and history[0].get("role") != "user":
+            history = history[1:]
+        self._anchor = (ctx.session_id, history[0]) if history else None
+        return history
+
     # --- lifecycle ---
 
-    async def start(self) -> None:
-        if self._server is not None:
-            await self._server.start()
-        self._client = httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=5.0))
+    async def start(self, memory_context: str = "") -> None:
+        self._memory = memory_context
+        try:
+            if self._server is not None:
+                await self._server.start()
+        except Exception as exc:
+            self.error = str(exc)
+            raise
+        self.error = None
+        if self._client is None:
+            self._client = httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=5.0))
         # Warm-up: same system prompt and tools as a real turn, so turn one hits the cache.
-        messages = [{"role": "system", "content": self._system("")}, {"role": "user", "content": "hi"}]
+        messages = [{"role": "system", "content": self._system(memory_context)}, {"role": "user", "content": "hi"}]
         try:
             await self._client.post(self._url, json=self._body(messages, True, 1, False),
                                     headers=self._headers())
@@ -171,13 +237,20 @@ class LocalBrain:
         cancel = self._cancel = asyncio.Event()
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": self._system(ctx.memory_context)},
-            *ctx.history,
+            *self._history(ctx),
             {"role": "user", "content": with_recalled(user_text, ctx.recalled)},
         ]
         done = TurnDone()
         try:
-            if self._client is None:
-                raise RuntimeError("local brain not started")
+            if self._client is None or self.error:
+                # The last start failed (model missing, server crashed): try again now,
+                # so fixing the cause needs no daemon restart.
+                try:
+                    await race(self.start(ctx.memory_context), cancel)
+                except Cancelled:
+                    raise
+                except Exception as exc:
+                    raise RuntimeError(f"the local model is not running: {exc}") from exc
             for rnd in range(MAX_ROUNDS):
                 calls: dict[int, dict[str, str]] = {}
                 text_parts: list[str] = []
@@ -195,6 +268,7 @@ class LocalBrain:
                         for c in calls.values()
                     ],
                 })
+                results: list[tuple[str, bool, str]] = []
                 for c in calls.values():
                     try:
                         args = json.loads(c["args"] or "{}")
@@ -210,11 +284,16 @@ class LocalBrain:
                         res = await race(asyncio.shield(task), cancel)  # the action itself finishes
                         ok, text = res.ok, res.text
                     yield ToolEnd(c["id"], c["name"], ok, text)
+                    results.append((c["name"], ok, text))
                     messages.append({"role": "tool", "tool_call_id": c["id"], "content": text})
-                if any(m.get("content") == NOT_CONFIRMED for m in messages[-len(calls):]):
+                if any(text == NOT_CONFIRMED for _, _, text in results):
                     # The user said no. A small model tends to ask again, or to claim it
                     # did the thing anyway, so the answer is fixed.
                     yield TextDelta(REFUSED_REPLY)
+                    break
+                if all(ok and name in SPEAK_RESULT for name, ok, _ in results) \
+                        and not _MORE_STEPS.search(user_text.lower()):
+                    yield TextDelta((" " if text_parts else "") + " ".join(text for _, _, text in results))
                     break
         except Cancelled:
             done = TurnDone(cancelled=True)

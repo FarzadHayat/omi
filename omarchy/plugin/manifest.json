@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "hark",
+  "name": "Hark",
+  "version": "0.1.0",
+  "author": "hark",
+  "license": "MIT",
+  "description": "Hark voice assistant status in the bar, with the conversation, typed requests, yes and no answers, and stop.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Hark",
+    "description": "A small mark that shows whether Hark is listening, thinking, speaking, working or waiting for a yes or no. Click it for the conversation.",
+    "category": "AI",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
