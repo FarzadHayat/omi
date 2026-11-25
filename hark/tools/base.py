@@ -17,6 +17,10 @@ from typing import Any, Literal
 # destructive: hard or impossible to undo (close a window, delete, send, power off).
 Safety = Literal["read", "reversible", "destructive"]
 
+# ToolResult.text when the user said no (or did not answer). Brains check for it so
+# they do not ask the same question again in the same turn.
+NOT_CONFIRMED = "Cancelled, not confirmed."
+
 
 @dataclass
 class ToolResult:
@@ -76,7 +80,7 @@ class ToolRegistry:
         if tool.safety == "destructive":
             question = tool.confirm_prompt(args) if tool.confirm_prompt else f"Run {name}?"
             if self.confirm is None or not await self.confirm(question):
-                return ToolResult(False, "Cancelled, not confirmed.")
+                return ToolResult(False, NOT_CONFIRMED)
         try:
             return await tool.fn(**args)
         except TypeError as exc:

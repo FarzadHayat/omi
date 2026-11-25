@@ -14,6 +14,9 @@ Client sends one request object per line:
     {"cmd": "ask_confirm", "question": "..."}  used by the hark MCP server: the daemon
                                          asks the user (voice plus confirm_request event),
                                          replies {"ok": true, "answer": true|false}
+    {"cmd": "tool", "name": "remember", "args": {...}}  used by the hark MCP server for
+                                         tools that live in the daemon (memory, delegate);
+                                         replies {"ok": true, "result": {"ok": ..., "text": ...}}
     {"cmd": "status"}                    reply with one status object
     {"cmd": "set", "key": "brain.talker", "value": "claude"}  change a setting live
     {"cmd": "subscribe"}                 keep the connection open and receive all events
@@ -37,5 +40,6 @@ Events (each has "event"):
 Timing traces are also appended to config.STATE_DIR / "turns.jsonl".
 """
 
-COMMANDS = ("say", "wav", "ptt_start", "ptt_stop", "stop", "confirm", "ask_confirm", "status", "set", "subscribe")
+COMMANDS = ("say", "wav", "ptt_start", "ptt_stop", "stop", "confirm", "ask_confirm", "tool", "status", "set",
+            "subscribe")
 EVENTS = ("state", "transcript", "tool", "confirm_request", "progress", "timing")
