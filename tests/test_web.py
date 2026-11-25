@@ -24,6 +24,8 @@ from hark.web.websocket import connect
 from tests.fakes import CaptureOut, FakeAudioIn, FakeBrain, FakeRouter, FakeSTT, FakeTTS, Route, make_registry
 
 ME = "me@example.com"
+PHONE_IP = "100.101.102.103"  # the X-Forwarded-For tailscaled writes for a phone
+PC_IPS = {"100.66.1.1", "fd7a:115c:a1e0::1"}  # this PC's own tailnet addresses
 
 
 @pytest.fixture
@@ -49,7 +51,7 @@ def make(sock_dir, brain=None, peer_ok=lambda sock: True, origins=None):
     reg.confirm = session.confirm
     d = Daemon(session, Config(), audio_in=FakeAudioIn(), socket_path=sock_dir / "run" / "hark.sock")
     cfg = WebConfig(port=0, origins=origins or [])
-    d.web = web.WebServer(d, cfg, logins={ME}, peer_ok=peer_ok)
+    d.web = web.WebServer(d, cfg, logins={ME}, own_ips=PC_IPS, peer_ok=peer_ok)
     d.out, d.calls = out, calls
     return d
 
@@ -62,9 +64,11 @@ async def daemon(sock_dir):
     await d.close()
 
 
-async def http_get(port, path, headers=None):
+async def http_get(port, path, headers=None, ip=PHONE_IP):
     reader, writer = await asyncio.open_connection("127.0.0.1", port)
     lines = [f"GET {path} HTTP/1.1", f"Host: 127.0.0.1:{port}", "Connection: close"]
+    if ip:
+        lines.append(f"X-Forwarded-For: {ip}")
     lines += [f"{k}: {v}" for k, v in (headers or {}).items()]
     writer.write(("\r\n".join(lines) + "\r\n\r\n").encode())
     await writer.drain()
@@ -76,8 +80,10 @@ async def http_get(port, path, headers=None):
     return status, hdrs, body
 
 
-def ws_headers(port, login=ME, origin=None):
+def ws_headers(port, login=ME, origin=None, ip=PHONE_IP):
     h = {"Origin": origin if origin is not None else f"https://127.0.0.1:{port}"}
+    if ip:
+        h["X-Forwarded-For"] = ip
     if login:
         h["Tailscale-User-Login"] = login
     return h
@@ -216,11 +222,65 @@ async def test_configured_origin_is_accepted(sock_dir):
 
 
 async def test_duplicate_login_headers_are_refused(daemon):
-    reader, writer = await asyncio.open_connection("127.0.0.1", daemon.web.port)
-    writer.write(f"GET / HTTP/1.1\r\nHost: x\r\nTailscale-User-Login: {ME}\r\nTailscale-User-Login: a@b.c\r\n\r\n".encode())
-    raw = await asyncio.wait_for(reader.read(), 3)
-    writer.close()
-    assert raw.startswith(b"HTTP/1.1 400")
+    for dup in (f"Tailscale-User-Login: {ME}\r\nTailscale-User-Login: a@b.c",
+                f"Tailscale-User-Login: {ME}\r\nX-Forwarded-For: {PHONE_IP}\r\nX-Forwarded-For: 100.66.1.1"):
+        reader, writer = await asyncio.open_connection("127.0.0.1", daemon.web.port)
+        writer.write(f"GET / HTTP/1.1\r\nHost: x\r\n{dup}\r\n\r\n".encode())
+        raw = await asyncio.wait_for(reader.read(), 3)
+        writer.close()
+        assert raw.startswith(b"HTTP/1.1 400")
+
+
+async def test_programs_on_this_pc_are_refused_even_with_the_owner_login(daemon):
+    # tailscaled stamps the owner's login on requests a local program sends through
+    # `tailscale serve`, so the Claude brain could otherwise answer its own questions.
+    port = daemon.web.port
+    login = {"Tailscale-User-Login": ME}
+    for ip in ("100.66.1.1", "fd7a:115c:a1e0::1", "fd7a:115c:a1e0:0::1", None, "", "127.0.0.1",
+               "172.17.0.2", "garbage", "100.66.1.1:4433"):
+        status, _, body = await http_get(port, "/", login, ip=ip)
+        assert status == 403, ip
+    with pytest.raises(ConnectionError, match="403"):
+        await connect(f"ws://127.0.0.1:{port}/ws", ws_headers(port, ip="100.66.1.1"))
+    status, _, _ = await http_get(port, "/", login, ip=f"9.9.9.9, {PHONE_IP}")  # the last hop is tailscaled's
+    assert status == 200
+    status, _, _ = await http_get(port, "/", login, ip="fd7a:115c:a1e0::abcd")  # a phone over IPv6
+    assert status == 200
+
+
+async def test_a_local_program_cannot_answer_a_question_through_the_page(daemon):
+    q = asyncio.create_task(daemon.session.confirm("Delete the Documents folder?"))
+    await asyncio.sleep(0.05)
+    cid = daemon.session.pending_confirm["id"]
+    with pytest.raises(ConnectionError, match="403"):
+        ws = await connect(f"ws://127.0.0.1:{daemon.web.port}/ws", ws_headers(daemon.web.port, ip="100.66.1.1"))
+        await ws.send(json.dumps({"cmd": "confirm", "answer": True, "id": cid}))
+    assert daemon.session.pending_confirm is not None
+    daemon.session.answer(False, cid)
+    assert await q is False
+
+
+def test_own_addresses_from_tailscale_status():
+    status = {"Self": {"TailscaleIPs": ["100.66.171.111", "fd7a:115c:a1e0::6f2e:ab70"]}}
+    assert {str(ip) for ip in web.own_addresses(status)} == {"100.66.171.111", "fd7a:115c:a1e0::6f2e:ab70"}
+    assert web.own_addresses({}) == set() and web.own_addresses({"Self": {"TailscaleIPs": ["x"]}}) == set()
+
+
+async def test_unknown_own_addresses_refuse_everyone(sock_dir, monkeypatch):
+    d = make(sock_dir)
+    d.web.own_ips = None
+
+    async def unreadable():
+        return {}
+
+    monkeypatch.setattr(web, "tailnet_status", unreadable)
+    await d.start()
+    try:
+        assert "tailnet addresses" in d.status()["errors"]["web"]
+        status, _, _ = await http_get(d.web.port, "/", {"Tailscale-User-Login": ME})
+        assert status == 403
+    finally:
+        await d.close()
 
 
 def test_owner_login_from_tailscale_status():
@@ -235,9 +295,9 @@ async def test_no_allowed_login_shows_in_status(sock_dir, monkeypatch):
     d.web.logins = None
 
     async def nobody():
-        return None
+        return {"Self": {"TailscaleIPs": ["100.66.1.1"]}}
 
-    monkeypatch.setattr(web, "tailnet_owner", nobody)
+    monkeypatch.setattr(web, "tailnet_status", nobody)
     await d.start()
     try:
         assert "web" in d.status()["errors"]
@@ -440,6 +500,52 @@ async def test_phone_hanging_up_mid_utterance_drops_it(daemon):
             break
         await asyncio.sleep(0.02)
     assert daemon.session._utt is None and daemon.session.state.value == "idle"
+
+
+async def test_phone_talk_is_cut_after_the_limit(daemon, monkeypatch):
+    monkeypatch.setattr(web, "MAX_UTTERANCE_S", 0.5)
+    phone = await Phone.open(daemon)
+    await phone.send({"cmd": "ptt_start"})
+    await phone.wait(lambda e: e.get("state") == "listening")
+    for f in mic_frames(0.6):  # more audio than the limit holds
+        await phone.send(f)
+    err = await phone.wait(lambda e: e["event"] == "error")
+    assert "too long" in err["text"]
+    assert daemon.session._utt is None and daemon.session.state.value == "idle"
+    await phone.send({"cmd": "ptt_stop"})
+    await phone.wait(lambda e: e["event"] == "error" and e["text"] == "not listening")
+    assert daemon.session.stt.calls == 0
+    await phone.close()
+
+
+async def test_phone_that_goes_silent_while_holding_talk_is_let_go(daemon, monkeypatch):
+    monkeypatch.setattr(web, "MAX_UTTERANCE_S", 0.2)
+    phone = await Phone.open(daemon)
+    await phone.send({"cmd": "ptt_start"})
+    await phone.wait(lambda e: e.get("state") == "listening")
+    err = await phone.wait(lambda e: e["event"] == "error")  # nothing more arrives: the phone dropped
+    assert "too long" in err["text"] and daemon.session._utt is None
+    await phone.close()
+
+
+async def test_long_typed_text_is_refused(daemon):
+    phone = await Phone.open(daemon)
+    await phone.send({"cmd": "say", "text": "a" * (web.MAX_SAY_CHARS + 1)})
+    err = await phone.wait(lambda e: e["event"] == "error")
+    assert "limited" in err["text"] and not phone.kinds("done")
+    await phone.close()
+
+
+async def test_unexpected_errors_do_not_reach_the_phone(daemon, monkeypatch):
+    async def boom():
+        raise RuntimeError("secret detail /home/someone/.config")
+
+    monkeypatch.setattr(daemon.session, "stop", boom)
+    phone = await Phone.open(daemon)
+    await phone.send({"cmd": "stop"})
+    err = await phone.wait(lambda e: e["event"] == "error")
+    assert err["text"] == web.INTERNAL_ERROR and "secret" not in json.dumps(phone.events)
+    await phone.close()
 
 
 async def test_bad_messages_keep_the_socket_usable(daemon):

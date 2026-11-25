@@ -12,7 +12,7 @@ from typing import Any
 
 from hark.brain.base import VOICE_STYLE
 from hark.brain.claude_session import ClaudeSession
-from hark.brain.local import SpeechFilter, with_recalled
+from hark.brain.local import SpeechFilter, new_recall, with_recalled
 from hark.config import STATE_DIR, Config
 from hark.events import BrainEvent, TextDelta, ToolEnd, ToolStart, TurnContext, TurnDone
 
@@ -76,7 +76,7 @@ class ClaudeBrain:
                 self._memory = ctx.memory_context
                 await self.session.restart(self._prompt())
             self._session_id = ctx.session_id
-            content = with_recalled(user_text, ctx.recalled)
+            content = with_recalled(user_text, new_recall(ctx.recalled, ctx.history, user_text))
             if ctx.history and self.session.turns == 0:
                 content = replay(ctx.history) + content
             speech = SpeechFilter()

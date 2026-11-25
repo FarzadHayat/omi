@@ -131,6 +131,10 @@ class ClaudeSession:
 
     async def close(self) -> None:
         self._closing = True
+        # A start still on its way would spawn a process after the kill below.
+        if self._starting is not None and not self._starting.done():
+            await asyncio.gather(asyncio.shield(self._starting), return_exceptions=True)
+            self._closing = True  # _spawn resets it
         await self._kill()
 
     async def _kill(self) -> None:

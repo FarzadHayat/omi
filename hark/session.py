@@ -289,6 +289,7 @@ class Session:
         self.progress_interval = progress_interval
 
         self.state = State.IDLE
+        self.closed = False  # set by close(): the daemon is shutting down
         self.session_id = _new_session_id()
         self.history: list[dict[str, str]] = []
         self.transcript: list[dict[str, str]] = []  # whole session, for on_session_end
@@ -317,6 +318,7 @@ class Session:
         self._loops.append(asyncio.create_task(self._idle_watch()))
 
     async def close(self) -> None:
+        self.closed = True
         await self.stop()
         for task in self._loops:
             task.cancel()

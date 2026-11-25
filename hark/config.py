@@ -34,7 +34,9 @@ class AudioConfig:
 
 @dataclass
 class SttConfig:
-    engine: str = "moonshine"  # moonshine | nemotron
+    # moonshine | nemotron. Nemotron streams while you speak: on 96 spoken commands it
+    # heard 60 of 63 routable ones right (Moonshine 48), at about 215 ms after speech (45).
+    engine: str = "nemotron"
     moonshine_dir: str = str(MODELS_DIR / "moonshine-base-en")
     nemotron_dir: str = str(MODELS_DIR / "nemotron-streaming-160ms")
     threads: int = 4
@@ -71,7 +73,10 @@ class ClaudeConfig:
 
 @dataclass
 class BrainConfig:
-    talker: str = "local"  # local | claude : who you converse with
+    # local | claude : who you converse with. Claude measured faster here (first audio
+    # 881 vs 1284 ms on chat, action 852 vs 1733 ms on tool turns) and answered 10 of 10
+    # test prompts well against about 8 for the local 4B model. Local works offline.
+    talker: str = "claude"
     worker: str = "claude"  # claude | off  : who does long multi-step jobs
     local: LocalLlmConfig = field(default_factory=LocalLlmConfig)
     claude: ClaudeConfig = field(default_factory=ClaudeConfig)

@@ -310,6 +310,26 @@ async def test_turn_after_a_crash_never_hangs(fake_claude):
         await brain.close()
 
 
+async def test_close_while_starting_leaves_no_process(fake_claude):
+    """A memory job cancelled while its brain is still starting (the user began talking,
+    or the daemon is stopping) used to leave a claude process running for good."""
+    cmd, _ = fake_claude
+    brain = ClaudeBrain(Config(), claude_cmd=cmd, use_mcp=False)
+    task = asyncio.create_task(brain.start())
+    await asyncio.sleep(0)
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+    await brain.close()
+    await asyncio.sleep(0.5)
+    proc = brain.session._proc
+    try:
+        assert proc is None or proc.returncode is not None
+    finally:
+        if proc is not None and proc.returncode is None:
+            proc.kill()
+            await proc.wait()
+
+
 # --- speed ---
 
 

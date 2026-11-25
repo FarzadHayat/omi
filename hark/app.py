@@ -12,7 +12,7 @@ import numpy as np
 
 from hark.config import Config
 from hark.daemon import Daemon
-from hark.events import TextDelta, TurnContext, TurnDone
+from hark.events import State, TextDelta, TurnContext, TurnDone
 
 log = logging.getLogger(__name__)
 
@@ -110,7 +110,13 @@ async def build(cfg: Config) -> Daemon:
 
     async def on_session_end(session_id: str, transcript: str) -> None:
         # jobs.end_session reads the transcript from memory (Session logged it there).
+        before = memory.context()
         await jobs.end_session(memory, session_id, llm)
+        after = memory.context()
+        # Warm the talker on the new memory now, while nobody talks, so the next
+        # session's first turn pays for no Claude restart or local prompt re-read.
+        if after != before and not session.closed and session.state is State.IDLE and session.pending_confirm is None:
+            await session.brain.start(after)
 
     session = Session(
         stt=stt,

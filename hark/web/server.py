@@ -1,9 +1,11 @@
 """The phone and tablet page: a small HTTP and WebSocket server inside the daemon.
 
 It listens on 127.0.0.1 only and is reached through `tailscale serve`, which proxies
-from tailscaled (a root process) and adds the Tailscale-User-Login header. A request
-is answered only when it came from that proxy and the login is on the allowlist; a
-WebSocket also needs an Origin of the page itself. The wire format is in hark.protocol.
+from tailscaled (a root process) and adds the Tailscale-User-Login and X-Forwarded-For
+headers. A request is answered only when it came from that proxy, from another device
+on the tailnet (tailscaled also stamps the owner's login on requests made from this PC,
+so those are refused by address), and the login is on the allowlist; a WebSocket also
+needs an Origin of the page itself. The wire format is in hark.protocol.
 
 Each phone gets its own WebSocket. Its turns play their reply on the phone (PhoneOut),
 never on the PC speakers, and it sees every session event like a subscriber.
@@ -12,6 +14,7 @@ never on the PC speakers, and it sees every session event like a subscriber.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import logging
 import socket
@@ -56,10 +59,15 @@ HEADERS = {
     "Cache-Control": "no-cache",
 }
 LOGIN_HEADER = "tailscale-user-login"
+FORWARDED_HEADER = "x-forwarded-for"  # set by tailscaled to the connecting device's address
+TAILNET = (ipaddress.ip_network("100.64.0.0/10"), ipaddress.ip_network("fd7a:115c:a1e0::/48"))
 MAX_HEAD = 16384  # bytes of request line plus headers
 KEEPALIVE_S = 30.0
 OUTBOX_LIMIT = 4000  # queued frames per phone before a phone that does not read is dropped
 DRAIN_SLACK_S = 1.0  # a reply counts as played this long after its expected end, ack or not
+MAX_UTTERANCE_S = 60.0  # a phone's push-to-talk is cut after this much audio or wall time
+MAX_SAY_CHARS = 2000
+INTERNAL_ERROR = "something went wrong on the PC"
 THEME_KEYS = {
     "background": "bg", "foreground": "fg", "lighter_background": "surface", "dark_background": "bg-deep",
     "dark_foreground": "muted", "accent": "accent", "red": "red", "green": "green", "yellow": "yellow",
@@ -101,15 +109,37 @@ def owner_login(status: dict[str, Any]) -> str | None:
         return None
 
 
-async def tailnet_owner() -> str | None:
+def own_addresses(status: dict[str, Any]) -> set[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+    """This machine's own tailnet addresses, from `tailscale status --json`."""
+    out = set()
+    try:
+        for ip in status["Self"]["TailscaleIPs"] or ():
+            out.add(ipaddress.ip_address(ip))
+    except (KeyError, TypeError, ValueError):
+        return set()
+    return out
+
+
+async def tailnet_status() -> dict[str, Any]:
+    """`tailscale status --json`, or {} when it cannot be read."""
     try:
         proc = await asyncio.create_subprocess_exec(
             "tailscale", "status", "--json", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
         )
         out, _ = await asyncio.wait_for(proc.communicate(), 5.0)
-        return owner_login(json.loads(out))
+        status = json.loads(out)
+        return status if isinstance(status, dict) else {}
     except (OSError, TimeoutError, ValueError) as exc:
-        log.error("could not read the tailnet owner: %s", exc)
+        log.error("could not read the tailnet status: %s", exc)
+        return {}
+
+
+def forwarded_for(req: Request) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """The connecting device's address as tailscaled wrote it (the last hop is its own)."""
+    raw = req.headers.get(FORWARDED_HEADER, "").rsplit(",", 1)[-1].strip()
+    try:
+        return ipaddress.ip_address(raw)
+    except ValueError:
         return None
 
 
@@ -224,6 +254,7 @@ class WebClient:
         self._seq = 0
         self._utt: Any = None  # the session utterance this phone opened
         self._turns: set[asyncio.Task[Any]] = set()
+        self._limit: asyncio.TimerHandle | None = None  # ends a push-to-talk that runs too long
         self._queue: asyncio.Queue[str | bytes | None] = asyncio.Queue(OUTBOX_LIMIT)
         self._pump = asyncio.create_task(self._run_pump())
 
@@ -280,7 +311,10 @@ class WebClient:
             while (msg := await self.ws.recv()) is not None:
                 if isinstance(msg, bytes):
                     if self._owns_utterance():
-                        s.feed_audio(decode_mic(msg))
+                        if self._utt.samples + len(msg) // 2 > MAX_UTTERANCE_S * 16000:
+                            await self._drop_utterance("talked for too long; that was not sent")
+                        else:
+                            s.feed_audio(decode_mic(msg))
                     continue
                 try:
                     req = json.loads(msg)
@@ -293,11 +327,12 @@ class WebClient:
                     await self.handle(req)
                 except RequestError as exc:
                     self.send({"event": "error", "text": str(exc), "cmd": req.get("cmd")})
-                except Exception as exc:
+                except Exception:
                     log.exception("phone request failed: %r", req.get("cmd"))
-                    self.send({"event": "error", "text": f"internal error: {exc}", "cmd": req.get("cmd")})
+                    self.send({"event": "error", "text": INTERNAL_ERROR, "cmd": req.get("cmd")})
         finally:
             self.daemon._subs.discard(self)
+            self._cancel_limit()
             if self._owns_utterance():
                 self._utt = None
                 await s.cancel_utterance()
@@ -315,7 +350,12 @@ class WebClient:
             await self.daemon.release_mic()  # the desktop key's capture must not feed this one
             await s.begin_utterance()  # talks over the assistant
             self._utt = getattr(s, "_utt", None)
+            self._cancel_limit()
+            # A phone that drops off the network while holding talk sends nothing more.
+            self._limit = asyncio.get_running_loop().call_later(
+                MAX_UTTERANCE_S, lambda utt=self._utt: self._spawn(self._expire(utt)))
         elif cmd == "ptt_stop":
+            self._cancel_limit()
             if not self._owns_utterance():
                 self._utt = None
                 raise RequestError("not listening")
@@ -325,8 +365,11 @@ class WebClient:
             text = req.get("text")
             if not isinstance(text, str) or not text.strip():
                 raise RequestError("say needs non-empty text")
+            if len(text) > MAX_SAY_CHARS:
+                raise RequestError(f"say text is limited to {MAX_SAY_CHARS} characters")
             self._spawn(self._turn(text))
         elif cmd == "stop":
+            self._cancel_limit()
             if self._owns_utterance():
                 self._utt = None
                 await s.cancel_utterance()
@@ -342,6 +385,21 @@ class WebClient:
             ev = self.played.get(req.get("seq"))  # type: ignore[arg-type]
             if ev is not None:
                 ev.set()
+
+    def _cancel_limit(self) -> None:
+        if self._limit is not None:
+            self._limit.cancel()
+            self._limit = None
+
+    async def _drop_utterance(self, why: str) -> None:
+        self._cancel_limit()
+        self._utt = None
+        await self.session.cancel_utterance()
+        self.send({"event": "error", "text": why, "cmd": "ptt_start"})
+
+    async def _expire(self, utt: Any) -> None:
+        if self._utt is utt and self._owns_utterance():
+            await self._drop_utterance("talked for too long; that was not sent")
 
     def _spawn(self, coro: Any) -> None:
         task = asyncio.create_task(coro)
@@ -395,7 +453,7 @@ def parse_head(raw: bytes) -> Request | None:
             return None
         k, v = line.split(":", 1)
         k = k.strip().lower()
-        if k == LOGIN_HEADER and k in headers:
+        if k in (LOGIN_HEADER, FORWARDED_HEADER) and k in headers:
             return None  # one identity per request
         headers[k] = v.strip()
     return Request(method, target.split("?", 1)[0], headers)
@@ -408,12 +466,15 @@ class WebServer:
         cfg: WebConfig,
         *,
         logins: set[str] | None = None,
+        own_ips: set[str] | None = None,
         peer_ok: Callable[[socket.socket], bool] | None = None,
         host: str = "127.0.0.1",
     ) -> None:
         self.daemon = daemon
         self.cfg = cfg
         self.logins = set(logins) if logins is not None else None
+        # This PC's tailnet addresses: requests from them are local programs, not a phone.
+        self.own_ips = {ipaddress.ip_address(ip) for ip in own_ips} if own_ips is not None else None
         self.peer_ok = peer_ok or (lambda sock: peer_uid(sock) == cfg.proxy_uid)
         self.host = host
         self.port = cfg.port
@@ -422,12 +483,19 @@ class WebServer:
         self._conns: set[asyncio.Task[Any]] = set()
 
     async def start(self) -> None:
+        status: dict[str, Any] | None = None
         if self.logins is None:
             self.logins = set(self.cfg.allowed_logins)
-            if not self.logins and (owner := await tailnet_owner()):
-                self.logins = {owner}
+            if not self.logins:
+                status = await tailnet_status()
+                if owner := owner_login(status):
+                    self.logins = {owner}
+        if self.own_ips is None:
+            self.own_ips = own_addresses(status if status is not None else await tailnet_status())
         if not self.logins:
             self.daemon.errors["web"] = "no Tailscale login is allowed; the phone page refuses everyone"
+        elif not self.own_ips:
+            self.daemon.errors["web"] = "could not read this PC's tailnet addresses; the phone page refuses everyone"
         self._server = await asyncio.start_server(self._conn, self.host, self.port, limit=MAX_HEAD)
         self.port = self._server.sockets[0].getsockname()[1]
         log.info("phone page on http://%s:%d", self.host, self.port)
@@ -446,6 +514,11 @@ class WebServer:
         """None when the request may be answered, else why not."""
         if sock is None or not self.peer_ok(sock):
             return "only through tailscale serve"
+        ip = forwarded_for(req)
+        if ip is None or not any(ip in net for net in TAILNET):
+            return "only from a device on the tailnet"
+        if not self.own_ips or ip in self.own_ips:
+            return "only from another device, not from this PC"
         login = req.headers.get(LOGIN_HEADER, "")
         if not login or login not in (self.logins or ()):
             return "not an allowed Tailscale login"

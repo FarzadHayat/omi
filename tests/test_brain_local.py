@@ -305,7 +305,9 @@ def test_local_talker_gets_a_slim_tool_list():
     brain = LocalBrain(LocalLlmConfig(base_url="http://127.0.0.1:1"), reg)
     tools = {t["function"]["name"]: t["function"]["description"] for t in brain._tools()}
     assert set(tools) == {"set_volume", "remember", "forget", "delegate"}  # recall runs every turn anyway
-    assert all(len(tools[n]) <= 90 for n in ("remember", "forget", "delegate"))
+    # The delegate line is longer on purpose: shorter ones made the 4B model hand plain
+    # questions to the worker (3 to 5 of 10 prompts, against 1 to 2 with this one).
+    assert all(len(tools[n]) <= 130 for n in ("remember", "forget", "delegate"))
 
 
 async def test_warmup_primes_the_memory_prefix():
@@ -524,3 +526,27 @@ def test_tools_without_required_arguments_drop_the_empty_list():
              for t in LocalBrain(LocalLlmConfig(base_url="http://127.0.0.1:1"), reg)._tools()}
     assert tools["lock_screen"] == {"type": "object", "properties": {}}
     assert tools["set_volume"]["required"] == ["percent"]
+
+
+def test_recall_already_in_the_conversation_is_not_repeated():
+    from hark.brain.local import new_recall
+
+    history = [{"role": "user", "content": "Tell me a fun fact about octopuses"},
+               {"role": "assistant", "content": "Octopuses have three hearts and blue blood."}]
+    recalled = ["user: Tell me a fun fact about octopuses… assistant: Octopuses have three hearts",
+                "The user's dance class is on Tuesdays."]
+    assert new_recall(recalled, history, "another one") == ["The user's dance class is on Tuesdays."]
+    assert new_recall(recalled, [], "hi") == recalled
+
+
+async def test_history_cut_is_not_fooled_by_a_repeated_message(setup):
+    server, brain, _ = setup
+    ask = [{"role": "user", "content": "what time is it"}, {"role": "assistant", "content": "It's 9 PM."}]
+    full = (ask * 6)[-12:]
+    await run(brain, "hello", TurnContext("s", history=full))
+    slid = full[2:] + [{"role": "user", "content": "hello"}, {"role": "assistant", "content": "Hi."}]
+    await run(brain, "again", TurnContext("s", history=slid))
+    assert server.requests[-1]["messages"][1:-1] == slid[-4:]  # moved the cut, did not restart at a look-alike
+    more = slid[2:] + [{"role": "user", "content": "again"}, {"role": "assistant", "content": "Hi again."}]
+    await run(brain, "and again", TurnContext("s", history=more))
+    assert server.requests[-1]["messages"][1:-1] == more[-6:]  # last turn's history is still the prefix

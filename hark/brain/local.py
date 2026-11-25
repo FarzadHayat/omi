@@ -32,7 +32,7 @@ LOCAL_SKIP = frozenset({"recall"})
 LOCAL_DESCRIPTIONS = {
     "remember": "Save a lasting fact about the user.",
     "forget": "Forget a saved fact.",
-    "delegate": "Hand long or multi-step work (coding, research, files, web) to the background worker.",
+    "delegate": "Start a long multi-step job on the computer (coding, editing files, web research). Never for a question you can answer yourself.",
 }
 # A device action whose result text already says what happened ("Opening Firefox.") is
 # spoken as is. A second model round would only rephrase it, and costs about 1.4 s of
@@ -93,6 +93,22 @@ def with_recalled(user_text: str, recalled: list[str]) -> str:
     return f"{user_text}\n\n(Notes from memory that may help: {' | '.join(recalled)})"
 
 
+_WORDS = re.compile(r"[a-z0-9']+")
+
+
+def new_recall(recalled: list[str], history: list[dict[str, Any]], user_text: str) -> list[str]:
+    """Drop recalled snippets the prompt already holds. Recall also finds the running
+    conversation in the session log; repeating it cost the local talker 100 to 150
+    prompt tokens a turn (300 to 500 ms) and told it nothing new."""
+    seen = set(_WORDS.findall(" ".join([user_text, *(str(m.get("content") or "") for m in history)]).lower()))
+    out = []
+    for snippet in recalled:
+        words = _WORDS.findall(snippet.lower())
+        if not words or sum(w in seen for w in words) < 0.8 * len(words):
+            out.append(snippet)
+    return out
+
+
 class Cancelled(Exception):
     pass
 
@@ -132,7 +148,7 @@ class LocalBrain:
         self._client: httpx.AsyncClient | None = None
         self._cancel = asyncio.Event()
         self._memory = ""
-        self._anchor: tuple[str, dict[str, Any]] | None = None  # (session id, first history message sent)
+        self._sent: tuple[str, list[dict[str, Any]]] | None = None  # (session id, history sent last turn)
         self.error: str | None = None  # why the last start failed; shown in status
 
     # --- request building ---
@@ -186,17 +202,19 @@ class LocalBrain:
         return tools
 
     def _history(self, ctx: TurnContext) -> list[dict[str, str]]:
-        """A tail of ctx.history that starts at the same message turn after turn, so
-        the cached prompt prefix survives the session's sliding window (see HISTORY_TAIL)."""
+        """A tail of ctx.history that keeps last turn's history as its prefix, so the
+        cached prompt survives the session's sliding window (see HISTORY_TAIL). Matched
+        as a whole block: single messages repeat ("what time is it")."""
         history = ctx.history
-        if self._anchor is not None and self._anchor[0] == ctx.session_id:
-            for i, m in enumerate(history):
-                if m == self._anchor[1]:
-                    return history[i:]
-            history = history[-HISTORY_TAIL:]  # the old start left the window: move the cut
+        prev = self._sent[1] if self._sent is not None and self._sent[0] == ctx.session_id else []
+        if prev:
+            n = len(prev)
+            start = next((i for i in range(len(history) - n + 1) if history[i:i + n] == prev), None)
+            # When last turn's start has left the window, move the cut forward.
+            history = history[start:] if start is not None else history[-HISTORY_TAIL:]
         while history and history[0].get("role") != "user":
             history = history[1:]
-        self._anchor = (ctx.session_id, history[0]) if history else None
+        self._sent = (ctx.session_id, list(history))
         return history
 
     # --- lifecycle ---
@@ -238,7 +256,7 @@ class LocalBrain:
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": self._system(ctx.memory_context)},
             *self._history(ctx),
-            {"role": "user", "content": with_recalled(user_text, ctx.recalled)},
+            {"role": "user", "content": with_recalled(user_text, new_recall(ctx.recalled, ctx.history, user_text))},
         ]
         done = TurnDone()
         try:

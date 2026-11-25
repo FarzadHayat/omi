@@ -9,6 +9,19 @@ from piper import PiperVoice, SynthesisConfig
 
 from hark.config import TtsConfig
 
+# Piper ends each sentence with about 200 ms of silence and starts the next with 60 ms.
+# The reply is cut into clauses, so after "Sure," the listener heard a 300 ms pause, a
+# full stop. After a clause mark the silence is cut to a short breath.
+CLAUSE_PAUSE_S = 0.08
+_CLAUSE_MARKS = (",", ";", ":")
+
+
+def trim_tail(audio: np.ndarray, rate: int, keep_s: float, floor: float = 0.01) -> np.ndarray:
+    """Drop trailing near-silence beyond keep_s seconds."""
+    loud = np.flatnonzero(np.abs(audio) > floor)
+    end = (loud[-1] + 1 if len(loud) else 0) + int(keep_s * rate)
+    return audio[:end]
+
 
 class PiperTTS:
     def __init__(self, cfg: TtsConfig) -> None:
@@ -21,5 +34,7 @@ class PiperTTS:
             pass
 
     def synth(self, text: str) -> Iterator[np.ndarray]:
+        clause = text.rstrip().endswith(_CLAUSE_MARKS)
         for chunk in self._voice.synthesize(text, syn_config=self._syn):
-            yield np.asarray(chunk.audio_float_array, dtype=np.float32)
+            audio = np.asarray(chunk.audio_float_array, dtype=np.float32)
+            yield trim_tail(audio, self.sample_rate, CLAUSE_PAUSE_S) if clause else audio

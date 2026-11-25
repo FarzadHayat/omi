@@ -140,3 +140,47 @@ def test_kokoro_speed_shortens_audio():
 def test_tts_unknown_engine():
     with pytest.raises(ValueError):
         tts.create(TtsConfig(engine="nope"))
+
+
+# --- speed ---
+
+
+def _tail_silence_s(audio: np.ndarray, rate: int) -> float:
+    loud = np.flatnonzero(np.abs(audio) > 0.01)
+    return (len(audio) - loud[-1] - 1) / rate
+
+
+def test_piper_keeps_only_a_breath_after_a_clause():
+    voice = tts.create(TtsConfig(engine="piper"))
+    clause = np.concatenate(list(voice.synth("Sure,")))
+    sentence = np.concatenate(list(voice.synth("Sure.")))
+    assert _tail_silence_s(clause, voice.sample_rate) <= 0.09
+    assert _tail_silence_s(sentence, voice.sample_rate) > 0.15  # a sentence end keeps its pause
+
+
+def test_nemotron_hotword_vocab_is_written_from_tokens(tmp_path):
+    from hark.stt.nemotron import write_hotwords
+
+    tokens = tmp_path / "tokens.txt"
+    tokens.write_text("<unk> 0\n▁t 1\n▁th 2\n")
+    hot, vocab = write_hotwords(tmp_path / "out", tokens, ["Omarchy", "Danzeira"])
+    assert Path(vocab).read_text().splitlines() == ["<unk>\t0", "▁t\t-1", "▁th\t-2"]
+    assert Path(hot).read_text().splitlines() == ["Omarchy", "Danzeira"]
+
+
+def test_nemotron_hears_the_users_own_words():
+    from hark.stt.nemotron import NemotronSTT
+
+    voice = tts.create(TtsConfig(engine="kokoro", kokoro_voice="af_heart"))
+    audio = to_16k(np.concatenate(list(voice.synth("Show me the Omarchy menu."))), voice.sample_rate)
+    audio = np.concatenate([np.zeros(3200, np.float32), audio])
+    plain = NemotronSTT(SttConfig(engine="nemotron"), hotwords=()).transcribe(audio).lower()
+    boosted = NemotronSTT(SttConfig(engine="nemotron")).transcribe(audio).lower()
+    assert "omarchy" not in plain and "omarchy" in boosted, (plain, boosted)
+
+
+def test_default_engine_is_streaming():
+    from hark.session import is_streaming
+
+    assert SttConfig().engine == "nemotron"
+    assert is_streaming(stt.create(SttConfig()))

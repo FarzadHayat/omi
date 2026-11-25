@@ -9,8 +9,15 @@ from pathlib import Path
 
 import pytest
 
-from hark import app
+from hark import app, config
 from hark.config import Config
+from hark.memory import jobs
+
+
+@pytest.fixture(autouse=True)
+def state_dir(tmp_path, monkeypatch):
+    """Turn traces go to a temp folder, never the real ~/.local/state/hark."""
+    monkeypatch.setattr(config, "STATE_DIR", tmp_path / "state")
 
 
 @pytest.fixture
@@ -24,13 +31,16 @@ async def test_missing_models_do_not_stop_the_daemon(tmp_path, sock_dir, monkeyp
     monkeypatch.setenv("HARK_DRY_RUN", "1")
     cfg = Config()
     cfg.audio.sink = "null"
+    cfg.stt.engine = "moonshine"
     cfg.stt.moonshine_dir = str(tmp_path / "no-stt")
     cfg.tts.piper_model = str(tmp_path / "no-tts.onnx")
+    cfg.brain.talker = "local"
     cfg.brain.worker = "off"
     cfg.brain.local.base_url = "http://127.0.0.1:9"  # nothing listens: no llama-server is started
     cfg.memory.dir = str(tmp_path / "mem" / "voice")
     cfg.memory.shared_dir = str(tmp_path / "mem")
     cfg.memory.index = str(tmp_path / "mem.sqlite")
+    cfg.web.port = 0  # never the real phone page port
     d = await app.build(cfg)
     d.socket_path = sock_dir / "hark.sock"
     await d.start()
@@ -44,3 +54,45 @@ async def test_missing_models_do_not_stop_the_daemon(tmp_path, sock_dir, monkeyp
     finally:
         await d.close()
     json.dumps(st)
+
+
+async def test_talker_is_warmed_on_the_new_memory_after_a_session_ends(tmp_path, sock_dir, monkeypatch):
+    monkeypatch.setenv("HARK_DRY_RUN", "1")
+    cfg = Config()
+    cfg.audio.sink = "null"
+    cfg.stt.engine = "moonshine"
+    cfg.stt.moonshine_dir = str(tmp_path / "no-stt")
+    cfg.tts.piper_model = str(tmp_path / "no-tts.onnx")
+    cfg.brain.talker = "local"
+    cfg.brain.worker = "off"
+    cfg.brain.local.base_url = "http://127.0.0.1:9"
+    cfg.memory.dir = str(tmp_path / "mem" / "voice")
+    cfg.memory.shared_dir = str(tmp_path / "mem")
+    cfg.memory.index = str(tmp_path / "mem.sqlite")
+    cfg.web.enabled = False
+
+    async def digest(memory, session_id, llm):
+        memory.end_session(session_id, "- The user likes green tea.")
+        return "ok"
+
+    monkeypatch.setattr(jobs, "end_session", digest)
+    d = await app.build(cfg)
+    d.socket_path = sock_dir / "hark.sock"
+    await d.start()
+    try:
+        await d.ready.wait()
+        starts: list[str] = []
+
+        async def start(memory_context=""):
+            starts.append(memory_context)
+
+        d.session.brain.start = start
+        await d.session.run_turn("what time is it", quiet=True)
+        await d.session.end_session()
+        assert len(starts) == 1 and "green tea" in starts[0] and starts[0] == d.session.memory.context()
+        await d.session.run_turn("what time is it", quiet=True)
+        d.session.closed = True  # shutting down: no new talker process
+        await d.session.end_session()
+        assert len(starts) == 1
+    finally:
+        await d.close()

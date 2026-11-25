@@ -52,7 +52,9 @@ Timing traces are also appended to config.STATE_DIR / "turns.jsonl".
 
 Phones and tablets (hark.web) use one WebSocket at /ws on the daemon's web port, reached
 through `tailscale serve`. Every request needs the Tailscale-User-Login header of an
-allowed login, and the WebSocket an Origin of the page itself.
+allowed login and an X-Forwarded-For of another tailnet device (programs on the PC
+itself are refused), and the WebSocket an Origin of the page itself. Push-to-talk is
+cut after 60 s and typed text is limited to 2000 characters.
 
     phone -> daemon, binary: 16 kHz mono Int16 little-endian PCM, sent between
                              ptt_start and ptt_stop (20 ms frames)
