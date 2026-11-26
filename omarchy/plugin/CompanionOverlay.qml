@@ -334,7 +334,7 @@ Item {
           foreground: Commons.Color.popups.text
           accent: Commons.Color.accent
           urgent: Commons.Color.urgent
-          background: Commons.Color.popups.background
+          background: Commons.Color.background
           lookX: (overlay.hasTarget || overlay.followCursor) ? (overlay.dx / overlay.dist) * overlay.gazeScale : 0
           lookY: (overlay.hasTarget || overlay.followCursor) ? (overlay.dy / overlay.dist) * overlay.gazeScale : 0
           Layout.alignment: Qt.AlignBottom

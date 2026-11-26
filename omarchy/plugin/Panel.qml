@@ -117,7 +117,7 @@ Panel {
       foreground: root.barForeground
       accent: Commons.Color.accent
       urgent: root.urgent
-      background: Commons.Color.bar.background
+      background: Commons.Color.background
       // Follow the user's cursor gently from the top-right bar area.
       lookX: omi.hasCursor ? Math.max(-1, Math.min(1, (omi.cursorX - 1650) / 520)) : 0
       lookY: omi.hasCursor ? Math.max(-1, Math.min(1, (omi.cursorY - 18) / 360)) : 0
@@ -169,7 +169,7 @@ Panel {
             foreground: Commons.Color.popups.text
             accent: Commons.Color.accent
             urgent: root.urgent
-            background: Commons.Color.popups.background
+            background: Commons.Color.background
             lookX: omi.hasCursor ? Math.max(-1, Math.min(1, (omi.cursorX - 1600) / 480)) : 0
             lookY: omi.hasCursor ? Math.max(-1, Math.min(1, (omi.cursorY - 120) / 380)) : 0
             Layout.alignment: Qt.AlignVCenter
@@ -177,6 +177,7 @@ Panel {
 
           ColumnLayout {
             Layout.fillWidth: true
+            Layout.minimumWidth: 0
             spacing: Style.space(2)
 
             Text {

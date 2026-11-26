@@ -246,6 +246,7 @@ class Daemon:
         if self.wake is not None and self.cfg.wake.enabled:
             try:
                 await self.wake.start()
+                await self.broadcast({"event": "wake", "enabled": True})
             except Exception as exc:
                 log.error("wake word failed to start: %s", exc)
                 self.errors["wake"] = str(exc) or type(exc).__name__

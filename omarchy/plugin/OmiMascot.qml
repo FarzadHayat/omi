@@ -35,6 +35,9 @@ Item {
 
   readonly property bool animate: !Style.reduceMotion
   readonly property bool compact: size < 28
+  // Always strip alpha from theme surface backgrounds (e.g. Liquid Glass) so the
+  // inner visor stays crisp instead of blending muddy grey against the outer shell.
+  readonly property color visorColor: Qt.rgba(background.r, background.g, background.b, 1.0)
   property real blinkFactor: 1.0      // 1 = open, 0.08 = closed
   property real thinkGlanceX: 0.0     // smooth gaze while thinking
   property real thinkGlanceY: 0.0
@@ -52,7 +55,7 @@ Item {
 
   readonly property color eyeColor: {
     if (phase === "offline") return Qt.rgba(foreground.r, foreground.g, foreground.b, 0.45)
-    if (phase === "listening") return accent
+    if (phase === "listening" || phase === "acting") return accent
     if (phase === "confirming") return urgent
     return foreground
   }
@@ -141,41 +144,40 @@ Item {
       NumberAnimation { from: -3; to: 0; duration: Style.duration(650); easing.type: Easing.InOutSine }
     }
 
-    // Outer chunky Omarchy "O" shell.
+    // Outer chunky Omarchy "O" shell with crisp opaque visor inside.
     Rectangle {
       id: shell
       anchors.centerIn: parent
       width: root.size * 0.92
       height: root.size * 0.84
-      radius: root.compact ? Math.max(3, width * 0.28) : width * 0.26
-      color: root.bodyColor
+      radius: root.compact ? Math.max(4, width * 0.28) : width * 0.26
+      color: root.visorColor
+      border.width: Math.max(2, Math.round(root.size * (root.compact ? 0.12 : 0.105)))
+      border.color: root.bodyColor
 
-      Behavior on color {
+      Behavior on border.color {
         ColorAnimation { duration: Style.duration(160); easing.type: Easing.OutCubic }
       }
 
-      // Inner dark face visor.
-      Rectangle {
+      // Inner face area inside the border.
+      Item {
         id: visor
-        anchors.centerIn: parent
-        width: shell.width * 0.74
-        height: shell.height * 0.72
-        radius: root.compact ? Math.max(2, width * 0.22) : width * 0.20
-        color: root.background
+        anchors.fill: parent
+        anchors.margins: shell.border.width
 
         // Eyes container, shifted smoothly by gaze vector.
         Item {
           id: eyes
-          width: visor.width * 0.74
-          height: visor.height * 0.56
-          x: (visor.width - width) / 2 + root.effectiveLookX * (visor.width * 0.10)
-          y: (visor.height - height) / 2 + (root.phase === "speaking" && !root.compact ? -visor.height * 0.07 : 0)
-             + root.effectiveLookY * (visor.height * 0.10)
+          width: visor.width * 0.78
+          height: visor.height * 0.58
+          x: (visor.width - width) / 2 + root.effectiveLookX * (visor.width * 0.11)
+          y: (visor.height - height) / 2 + (root.phase === "speaking" && !root.compact ? -visor.height * 0.08 : 0)
+             + root.effectiveLookY * (visor.height * 0.11)
 
           Behavior on x { NumberAnimation { duration: Style.duration(140); easing.type: Easing.OutCubic } }
           Behavior on y { NumberAnimation { duration: Style.duration(140); easing.type: Easing.OutCubic } }
 
-          readonly property real eyeW: Math.max(2, eyes.width * 0.29)
+          readonly property real eyeW: Math.max(2, eyes.width * 0.28)
           readonly property real baseEyeH: {
             if (root.phase === "offline") return Math.max(1.5, eyes.height * 0.16)
             if (root.phase === "listening") return eyes.height * 0.94
@@ -185,28 +187,16 @@ Item {
           }
           readonly property real eyeH: Math.max(1.5, baseEyeH * (root.phase === "offline" ? 1.0 : root.blinkFactor))
 
-          // Left eye
+          // Left eye (clean glowing pill, no dark dot artifact)
           Rectangle {
             id: leftEye
             width: eyes.eyeW
             height: eyes.eyeH
             radius: width / 2
-            x: eyes.width * 0.10
+            x: eyes.width * 0.11
             anchors.verticalCenter: parent.verticalCenter
             color: root.eyeColor
             rotation: root.phase === "acting" ? 6 : 0
-
-            // Cute specular catchlight (companion/panel size)
-            Rectangle {
-              visible: !root.compact && root.phase !== "offline" && eyes.eyeH > 6
-              width: Math.max(2, leftEye.width * 0.34)
-              height: width
-              radius: width / 2
-              x: leftEye.width * 0.48
-              y: leftEye.height * 0.16
-              color: root.background
-              opacity: 0.75
-            }
           }
 
           // Right eye
@@ -215,22 +205,11 @@ Item {
             width: eyes.eyeW
             height: root.phase === "confirming" ? eyes.eyeH * 0.82 : eyes.eyeH
             radius: width / 2
-            x: eyes.width - width - eyes.width * 0.10
+            x: eyes.width - width - eyes.width * 0.11
             anchors.verticalCenter: parent.verticalCenter
             anchors.verticalCenterOffset: root.phase === "confirming" ? -Math.max(1, eyes.height * 0.08) : 0
             color: root.eyeColor
             rotation: root.phase === "acting" ? -6 : 0
-
-            Rectangle {
-              visible: !root.compact && root.phase !== "offline" && eyes.eyeH > 6
-              width: Math.max(2, rightEye.width * 0.34)
-              height: width
-              radius: width / 2
-              x: rightEye.width * 0.48
-              y: rightEye.height * 0.16
-              color: root.background
-              opacity: 0.75
-            }
           }
         }
 
@@ -239,7 +218,7 @@ Item {
           visible: !root.compact && root.phase === "speaking"
           anchors.horizontalCenter: parent.horizontalCenter
           anchors.bottom: parent.bottom
-          anchors.bottomMargin: visor.height * 0.10
+          anchors.bottomMargin: visor.height * 0.08
           spacing: Math.max(2, visor.width * 0.06)
 
           Repeater {
@@ -267,13 +246,13 @@ Item {
       anchors.top: parent.top
       color: root.urgent
       border.width: 1
-      border.color: root.background
+      border.color: root.visorColor
 
       Text {
         anchors.centerIn: parent
         textFormat: Text.PlainText
         text: "?"
-        color: root.background
+        color: root.visorColor
         font.pixelSize: Math.max(8, Math.round(parent.width * 0.68))
         font.bold: true
       }
