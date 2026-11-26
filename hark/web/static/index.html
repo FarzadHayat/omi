@@ -16,7 +16,15 @@
 <body>
 <main class="app" data-state="connecting">
   <header class="bar">
-    <h1 id="name">Omi</h1>
+    <div class="brand">
+      <svg class="omi-face" viewBox="0 0 64 64" width="32" height="32" aria-hidden="true">
+        <rect x="4" y="8" width="56" height="48" rx="14" class="omi-shell"/>
+        <rect x="11" y="15" width="42" height="34" rx="9" class="omi-visor"/>
+        <rect x="20" y="23" width="8" height="16" rx="4" class="omi-eye"/>
+        <rect x="36" y="23" width="8" height="16" rx="4" class="omi-eye"/>
+      </svg>
+      <h1 id="name">Omi</h1>
+    </div>
     <p class="state"><span class="shape" aria-hidden="true"></span><span id="state-text">Connecting</span></p>
   </header>
 

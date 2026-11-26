@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from dataclasses import replace
 from typing import Any
 
@@ -185,6 +186,7 @@ async def build(cfg: Config) -> Daemon:
         # A missing profile is written from the facts once, while nobody is talking.
         idle_jobs=[lambda: jobs.profile_if_missing(memory, llm)],
         errors=errors,
+        track_cursor=bool(os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")),
     )
     if cfg.web.enabled:
         from hark.web.server import WebServer

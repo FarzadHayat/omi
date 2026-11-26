@@ -32,6 +32,8 @@ def test_registry_has_every_tool():
         "clipboard_get", "clipboard_set", "screenshot", "notify", "open_url", "current_time", "lock_screen",
         "power", "omarchy", "screen_info", "capture_screen", "ui_inspect", "ui_action",
         "mouse_move", "mouse_click", "mouse_scroll", "point_at", "highlight_window",
+        "terminal_list", "terminal_read", "terminal_run", "terminal_open",
+        "t3_threads", "t3_read", "t3_start", "t3_send", "t3_open",
     }
 
 
@@ -40,7 +42,8 @@ def test_safety_classes():
     assert {n for n, t in tools.items() if t.safety == "destructive"} == {"close_window", "power", "press_keys"}
     assert {n for n, t in tools.items() if t.safety == "read"} == {
         "list_windows", "active_window", "clipboard_get", "current_time",
-        "screen_info", "capture_screen", "ui_inspect", "point_at", "highlight_window"}
+        "screen_info", "capture_screen", "ui_inspect", "point_at", "highlight_window",
+        "terminal_list", "terminal_read", "t3_threads", "t3_read"}
     for t in tools.values():
         assert t.description and "\n" not in t.description and t.parameters["type"] == "object"
 
@@ -615,11 +618,20 @@ def test_secrets_denied(tool, inp):
     ("Write", {"file_path": f"{HOME}/.zshenv"}),
     ("Write", {"file_path": f"{HOME}/.config/hypr/hyprland.conf"}),
     ("Write", {"file_path": f"{HOME}/.claude/CLAUDE.md"}),
-    ("Write", {"file_path": f"{HOME}/Sync/Obsidian/Agent-Memory/MEMORY.md"}),
     ("Write", {"file_path": f"{HOME}/Work/app/.git/hooks/pre-commit"}),
 ])
 def test_risky_reads_and_writes_ask(tool, inp):
     assert classify_claude_tool(tool, inp)[0] == "confirm", inp
+
+
+def test_shared_memory_index_write_asks(tmp_path, monkeypatch):
+    from hark import config
+
+    shared = Path(HOME) / ".cache/omi-test-shared-mem"
+    cfg = config.Config()
+    cfg.memory.shared_dir = str(shared)
+    monkeypatch.setattr(config, "load", lambda path=None: cfg)
+    assert classify_claude_tool("Write", {"file_path": str(shared / "MEMORY.md")})[0] == "confirm"
 
 
 def test_dotdot_and_symlinks_resolve(tmp_path):

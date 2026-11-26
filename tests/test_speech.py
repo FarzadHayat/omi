@@ -163,9 +163,9 @@ def test_nemotron_hotword_vocab_is_written_from_tokens(tmp_path):
 
     tokens = tmp_path / "tokens.txt"
     tokens.write_text("<unk> 0\n▁t 1\n▁th 2\n")
-    hot, vocab = write_hotwords(tmp_path / "out", tokens, ["Omarchy", "Danzeira"])
+    hot, vocab = write_hotwords(tmp_path / "out", tokens, ["Omarchy", "Hyprland"])
     assert Path(vocab).read_text().splitlines() == ["<unk>\t0", "▁t\t-1", "▁th\t-2"]
-    assert Path(hot).read_text().splitlines() == ["Omarchy", "Danzeira"]
+    assert Path(hot).read_text().splitlines() == ["Omarchy", "Hyprland"]
 
 
 def test_nemotron_hears_the_users_own_words():

@@ -23,12 +23,25 @@ Item {
   property string liveSpeech: ""     // spoken reply updated clause by clause
   property string lastProgress: ""   // current background action label
   property var mascot: null          // { action, x, y, w, h, label, duration } while pointing/moving
+  property real cursorX: 0
+  property real cursorY: 0
+  property bool hasCursor: false
   property string _pendingSay: ""
 
   function receive(line) {
     var msg = Model.parseLine(line)
     if (!msg) return
     var ev = msg.event
+    if (ev === "cursor") {
+      var cx = Number(msg.x)
+      var cy = Number(msg.y)
+      if (isFinite(cx) && isFinite(cy)) {
+        cursorX = cx
+        cursorY = cy
+        hasCursor = true
+      }
+      return
+    }
     if (ev === "state") {
       var next = Model.knownState(msg.state)
       if (next === "listening") {

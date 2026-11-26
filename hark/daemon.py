@@ -153,6 +153,7 @@ class Daemon:
         idle_jobs: list[Job] | None = None,
         errors: dict[str, str] | None = None,
         web: Any = None,
+        track_cursor: bool = False,
     ) -> None:
         self.session = session
         self.web = web  # phone and tablet server (hark.web.server.WebServer), started with the socket
@@ -161,6 +162,7 @@ class Daemon:
         self.factories = factories or {}
         self.wav_out = wav_out
         self.socket_path = Path(socket_path or config.SOCKET_PATH)
+        self.track_cursor = track_cursor
         if isinstance(warmups, dict):
             self.warmups = warmups
         else:
@@ -176,6 +178,7 @@ class Daemon:
         self._listening = False
         self._pump: asyncio.Task[int] | None = None
         self._warm_task: asyncio.Task[None] | None = None
+        self._cursor_task: asyncio.Task[None] | None = None
         self._jobs: list[asyncio.Task[Any]] = []
         self._stopping = asyncio.Event()
         session.emit = self.broadcast
@@ -205,6 +208,30 @@ class Daemon:
                 self.errors["web"] = str(exc)
         await self.session.start()
         self._warm_task = asyncio.create_task(self._warm())
+        if self.track_cursor:
+            self._cursor_task = asyncio.create_task(self._cursor_loop())
+
+    async def _cursor_loop(self) -> None:
+        """Broadcast cursor coordinates (~12 Hz, only on movement >= 5 px) while subscribers exist,
+        so Omi's eyes in the bar and companion overlay can smoothly follow the pointer."""
+        from hark.tools.hyprland import hypr_query
+
+        last: tuple[int, int] | None = None
+        while not self._stopping.is_set():
+            await asyncio.sleep(0.08 if self._subs else 0.5)
+            if not self._subs:
+                continue
+            try:
+                pos = await asyncio.to_thread(hypr_query, "cursorpos")
+            except (OSError, ValueError):
+                await asyncio.sleep(1.0)
+                continue
+            if not isinstance(pos, dict) or "x" not in pos or "y" not in pos:
+                continue
+            x, y = int(pos["x"]), int(pos["y"])
+            if last is None or abs(x - last[0]) >= 5 or abs(y - last[1]) >= 5:
+                last = (x, y)
+                await self.broadcast({"event": "cursor", "x": x, "y": y})
 
     async def _warm(self) -> None:
         names = list(self.warmups)
@@ -267,6 +294,8 @@ class Daemon:
             await _quietly(self.web.close())
         if self._warm_task is not None:
             self._warm_task.cancel()
+        if self._cursor_task is not None:
+            self._cursor_task.cancel()
         for job in self._jobs:
             job.cancel()
         if self._listening and self.audio_in is not None:

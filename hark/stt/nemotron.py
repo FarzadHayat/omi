@@ -1,9 +1,9 @@
 """Nemotron streaming transducer through sherpa-onnx. Implements StreamingSTT.
 
-Names speech recognition has never seen (Omarchy, Danzeira) are boosted as hotwords.
-sherpa-onnx needs a SentencePiece vocab to split them into the model's pieces; the
-model ships only tokens.txt, so a vocab is written from it (a piece's score is minus
-its id, which is the BPE merge order).
+Uncommon names (like Omi, Omarchy, Hyprland, or custom words in config.toml) are
+boosted as hotwords. sherpa-onnx needs a SentencePiece vocab to split them into the
+model's pieces; the model ships only tokens.txt, so a vocab is written from it (a
+piece's score is minus its id, which is the BPE merge order).
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ TAIL_S = 0.48
 # 3 of 21 heard right to 11, word errors from 15.6% to 13.0%, commands the router
 # caught from 58 to 60 of 63, at about 6 ms more after speech. Adding the 114 installed
 # app names lowered word errors further but routed fewer (58); score 3.0 broke app names.
-HOTWORDS = ("Omarchy", "Hyprland", "Danzeira", "Superwhisper")
+HOTWORDS = ("Omi", "Omarchy", "Hyprland")
 HOTWORDS_SCORE = 2.0
 
 
@@ -45,13 +45,14 @@ def write_hotwords(folder: Path, tokens: Path, words: tuple[str, ...] | list[str
 
 
 class NemotronSTT:
-    def __init__(self, cfg: SttConfig, hotwords: tuple[str, ...] | list[str] = HOTWORDS,
+    def __init__(self, cfg: SttConfig, hotwords: tuple[str, ...] | list[str] | None = None,
                  hotwords_score: float = HOTWORDS_SCORE) -> None:
         d = cfg.nemotron_dir
+        words = cfg.hotwords if hotwords is None else hotwords
         extra: dict = {}
-        if hotwords:
+        if words:
             folder = Path(tempfile.mkdtemp(prefix="hark-stt-"))
-            hot, vocab = write_hotwords(folder, Path(d) / "tokens.txt", hotwords)
+            hot, vocab = write_hotwords(folder, Path(d) / "tokens.txt", words)
             extra = dict(decoding_method="modified_beam_search", hotwords_file=hot,
                          hotwords_score=hotwords_score, modeling_unit="bpe", bpe_vocab=vocab)
         try:
@@ -61,7 +62,7 @@ class NemotronSTT:
                 num_threads=cfg.threads, **extra,
             )
         finally:
-            if hotwords:
+            if words:
                 shutil.rmtree(folder, ignore_errors=True)  # read once, at load
         self._stream = self._rec.create_stream()
         t = np.arange(SAMPLE_RATE, dtype=np.float32) / SAMPLE_RATE

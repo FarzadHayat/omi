@@ -31,7 +31,16 @@ from hark.tools.base import Safety
 Decision = Literal["allow", "confirm", "deny"]
 HOME = Path(os.path.realpath(Path.home()))
 HARK_ROOT = Path(__file__).resolve().parents[2]  # hark's own code
-SHARED_MEMORY_INDEX = HOME / "Sync/Obsidian/Agent-Memory/MEMORY.md"
+
+
+def _shared_memory_index() -> Path | None:
+    from hark import config
+
+    try:
+        shared = config.load().memory.shared_dir
+    except Exception:
+        return None
+    return _expand(str(Path(shared) / "MEMORY.md")) if shared else None
 
 # --- secret paths ---
 
@@ -870,7 +879,8 @@ def guarded_write(path: str) -> str | None:
     p = _expand(path)
     if p == HARK_ROOT or HARK_ROOT in p.parents:
         return "hark's own code"
-    if p == SHARED_MEMORY_INDEX:
+    shared_index = _shared_memory_index()
+    if shared_index is not None and p == shared_index:
         return "the shared agent memory index"
     if _RC_NAMES.match(p.name):
         return "your shell or settings file " + p.name

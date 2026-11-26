@@ -67,6 +67,7 @@ class SttConfig:
     moonshine_dir: str = _model_path("moonshine-base-en")
     nemotron_dir: str = _model_path("nemotron-streaming-160ms")
     threads: int = 4
+    hotwords: list[str] = field(default_factory=lambda: ["Omi", "Omarchy", "Hyprland"])
 
 
 @dataclass
@@ -95,7 +96,10 @@ class LocalLlmConfig:
     base_url: str = ""
     api_key_env: str = ""  # name of the env var holding the key; never the key itself
     model_name: str = "local"
-    model: str = str(HOME / "models/Qwen3.5-4B/Qwen3.5-4B-Q4_K_M.gguf")
+    model: str = _model_path(
+        "llm/Qwen3.5-4B-Q4_K_M.gguf",
+        HOME / "models/Qwen3.5-4B/Qwen3.5-4B-Q4_K_M.gguf",
+    )
     port: int = 47910
     gpu_layers: int = 99
     ctx: int = 8192
@@ -122,9 +126,9 @@ class BrainConfig:
 @dataclass
 class MemoryConfig:
     enabled: bool = True
-    dir: str = str(HOME / "Sync/Obsidian/Agent-Memory/voice")
-    # Facts other agents already keep about the user. Read and searched, never written.
-    shared_dir: str = str(HOME / "Sync/Obsidian/Agent-Memory")
+    dir: str = str(DATA_DIR / "memory")
+    # Optional folder of facts other agents already keep about the user. Read-only.
+    shared_dir: str = ""
     index: str = str(DATA_DIR / "memory.sqlite")
     embeddings_url: str = "http://127.0.0.1:47801"  # optional; never on the blocking path
 

@@ -19,7 +19,7 @@ WORKER_PROMPT = """You are the background worker of {name}, a voice assistant an
 You get one task at a time and do the real multi-step work yourself: read and edit files,
 run commands, control the browser (Claude in Chrome tools), control desktop apps, and answer visual questions about the screen.
 Always pick the fastest reliable tool for the job:
-1. Direct desktop/window/Omarchy tools (launch_or_focus, focus_window, media, volume, omarchy) for OS actions.
+1. Direct desktop/window/Omarchy/terminal/T3 Code tools (`launch_or_focus`, `focus_window`, `media`, `volume`, `omarchy`, `terminal_*`, `t3_*`) for OS, terminal, and T3 Code actions.
 2. Claude in Chrome tools for anything inside the web browser (reading tabs, navigating, clicking, filling forms, searching).
 3. `ui_inspect` + `ui_action` (AT-SPI) for clicking/typing inside desktop apps without screenshots.
 4. `capture_screen` + `Read` (on the saved JPEG) + `mouse_click` / `mouse_scroll` / `type_text` / `press_keys` for visual or complex GUI tasks.
@@ -52,6 +52,10 @@ def progress_phrase(tool: str) -> str:
             return "Looking at the screen"
         if name in ("point_at", "highlight_window"):
             return "Pointing it out"
+        if name.startswith("terminal_"):
+            return "Checking the terminal"
+        if name.startswith("t3_"):
+            return "Using T3 Code"
         return "Using the computer"
     return _PHRASES.get(tool, "Working on it")
 

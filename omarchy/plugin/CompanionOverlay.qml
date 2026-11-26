@@ -91,12 +91,17 @@ Item {
       return Math.max(Style.space(48), Math.min(screenH - companionGroup.height - margin, targetY - companionGroup.height / 2))
     }
 
-    // Gaze vector from Omi's center to the target point.
+    // Gaze vector: look directly at pointed target when pointing, otherwise follow the live mouse cursor!
     readonly property real omiCenterX: companionGroup.x + mascotAvatar.x + mascotAvatar.width / 2
     readonly property real omiCenterY: companionGroup.y + mascotAvatar.y + mascotAvatar.height / 2
-    readonly property real dx: hasTarget ? (targetX - omiCenterX) : 0
-    readonly property real dy: hasTarget ? (targetY - omiCenterY) : 0
+    readonly property bool followCursor: !hasTarget && root.service && root.service.hasCursor
+    readonly property real gazeTargetX: hasTarget ? targetX : (followCursor ? root.service.cursorX : omiCenterX)
+    readonly property real gazeTargetY: hasTarget ? targetY : (followCursor ? root.service.cursorY : omiCenterY)
+    readonly property real dx: (hasTarget || followCursor) ? (gazeTargetX - omiCenterX) : 0
+    readonly property real dy: (hasTarget || followCursor) ? (gazeTargetY - omiCenterY) : 0
     readonly property real dist: Math.max(1, Math.sqrt(dx * dx + dy * dy))
+    // Scale gaze softly with distance so nearby cursor movements feel playful and natural.
+    readonly property real gazeScale: hasTarget ? 1.0 : Math.min(1.0, dist / 240.0)
 
     // ---- Spotlight ring / region highlight at pointed target ----
     Rectangle {
@@ -206,7 +211,7 @@ Item {
           Layout.maximumWidth: Style.space(340)
           implicitWidth: Math.min(Style.space(340), Math.max(Style.space(140), bubbleCol.implicitWidth + Style.space(26)))
           implicitHeight: bubbleCol.implicitHeight + Style.space(20)
-          color: Util.alpha(Commons.Color.background, 0.95)
+          color: Util.alpha(Commons.Color.popups.background, 0.96)
           borderSpec: Border.surfaceSpec(
             "popups",
             "border",
@@ -319,19 +324,19 @@ Item {
           }
         }
 
-        // Animated Omi mascot character
+        // Animated Omi mascot character (adapts live to active Omarchy theme)
         OmiMascot {
           id: mascotAvatar
           objectName: "companionMascot"
           size: overlay.mascotSize
           phase: root.phase
           showHalo: true
-          foreground: Commons.Color.foreground
+          foreground: Commons.Color.popups.text
           accent: Commons.Color.accent
           urgent: Commons.Color.urgent
-          background: Commons.Color.background
-          lookX: overlay.hasTarget ? (overlay.dx / overlay.dist) : 0
-          lookY: overlay.hasTarget ? (overlay.dy / overlay.dist) : 0
+          background: Commons.Color.popups.background
+          lookX: (overlay.hasTarget || overlay.followCursor) ? (overlay.dx / overlay.dist) * overlay.gazeScale : 0
+          lookY: (overlay.hasTarget || overlay.followCursor) ? (overlay.dy / overlay.dist) * overlay.gazeScale : 0
           Layout.alignment: Qt.AlignBottom
         }
       }

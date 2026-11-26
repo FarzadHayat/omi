@@ -80,6 +80,16 @@ button:active { scale: 0.97; }
   flex-wrap: wrap;
 }
 .bar h1 { margin: 0; font-size: 1.125rem; font-weight: 600; letter-spacing: 0.01em; }
+.brand { display: inline-flex; align-items: center; gap: 10px; }
+.omi-face .omi-shell { fill: var(--fg); transition: fill 160ms ease-out; }
+.omi-face .omi-visor { fill: var(--bg); }
+.omi-face .omi-eye { fill: var(--fg); transform-origin: center; transition: fill 160ms ease-out, transform 160ms ease-out; }
+.app[data-state="listening"] .omi-face .omi-shell,
+.app[data-state="listening"] .omi-face .omi-eye { fill: var(--accent); }
+.app[data-state="acting"] .omi-face .omi-shell { fill: var(--accent); }
+.app[data-state="confirming"] .omi-face .omi-shell,
+.app[data-state="confirming"] .omi-face .omi-eye { fill: var(--yellow); }
+.app:is([data-state="offline"], [data-state="connecting"]) .omi-face { opacity: 0.45; }
 
 /* --- state indicator: shape, text and colour --- */
 
