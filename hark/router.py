@@ -160,6 +160,9 @@ def match_app(spoken: str) -> str | None:
 
 _STOP = {"stop", "stop it", "stop talking", "be quiet", "quiet", "shut up", "shush", "cancel", "cancel that",
          "never mind", "nevermind", "forget it", "enough", "thats enough", "hush", "silence"}
+_GOODBYE = {"goodbye", "good bye", "bye", "bye bye", "see ya", "see you", "see you later",
+            "talk to you later", "catch you later", "thats all", "thats it", "im done", "were done",
+            "end call", "end the call", "hang up", "stop listening", "nothing else", "all done"}
 _MEDIA_NOUN = r"(?:the )?(?:music|song|track|video|playback|audio|podcast|media)"
 _MEDIA = [
     (rf"(?:play|resume|unpause|continue)(?: {_MEDIA_NOUN})?|play some music", "play", ""),
@@ -256,6 +259,8 @@ def route(text: str) -> Route | None:
         return None
     if t in _STOP:
         return Route("stop", {}, "")
+    if t in _GOODBYE:
+        return Route("goodbye", {}, "See ya.")
     if t in _TIME:
         return Route("current_time", {"part": "time"}, "")
     if t in _DATE:

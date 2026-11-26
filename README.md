@@ -6,7 +6,7 @@ A local-first voice assistant and animated on-screen companion for Omarchy & Hyp
 
 ## Features
 
-- **Fast voice loop + local wake word**: Always-on **"Hey Omi"** / **"Okay Omi"** wake word (`sherpa-onnx` 3.3M streaming keyword spotter + Silero VAD, ~1.7% CPU, toggleable live), streaming local STT (`nemotron` or `moonshine`), and neural local TTS (`kokoro` v1.0 or `piper`).
+- **Fast voice loop + conversational wake word**: Always-on **"Hey Omi"** / **"Okay Omi"** wake word (`sherpa-onnx` 3.3M streaming keyword spotter + Silero VAD, ~1.7% CPU, toggleable live) with continuous phone-call conversation mode (keeps listening after every reply until you say *"goodbye"* / *"see ya"* / *"that's all"* or pause for 12 s), streaming local STT (`nemotron` or `moonshine`), and neural local TTS (`kokoro` v1.0 or `piper`).
 - **Animated companion mascot**: Lives in the Omarchy bar and pops up as a click-through floating overlay with speech bubbles, pointing/highlighting (`point_at`, `highlight_window`), and cursor-following eyes.
 - **Follows your Omarchy theme live**: Bar icon, floating companion, conversation panel, and mobile web PWA automatically adapt to your active Omarchy theme (`Commons.Color` / `~/.local/state/omarchy/current/theme/colors.toml`).
 - **Desktop, browser, terminal & T3 Code control**:

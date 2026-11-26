@@ -36,10 +36,25 @@ def test_encode_phrase_and_keywords_text(tmp_path):
 
 
 def test_wake_chime_pcm():
-    pcm = wake.wake_chime_pcm(16000)
-    assert pcm.dtype == np.float32
-    assert 1200 <= len(pcm) <= 2000
-    assert float(np.max(np.abs(pcm))) <= 0.15
+    for fn in (wake.wake_chime_pcm, wake.sleep_chime_pcm):
+        pcm = fn(16000)
+        assert pcm.dtype == np.float32
+        assert 1200 <= len(pcm) <= 2000
+        assert float(np.max(np.abs(pcm))) <= 0.15
+
+
+def test_is_goodbye_and_router_goodbye():
+    from hark import router
+
+    for yes in ("goodbye", "Bye!", "see ya", "See you later.", "thanks omi, that's all",
+                "I'm done", "hang up", "stop listening", "go to sleep", "never mind"):
+        assert wake.is_goodbye(yes), yes
+    for no in ("what does goodbye mean in French", "tell me a story", "open the browser",
+               "remind me to say goodbye to Sam at five", "hello there"):
+        assert not wake.is_goodbye(no), no
+    r = router.route("see ya")
+    assert r is not None and r.tool == "goodbye"
+    assert router.route("go to sleep") is None  # kept out of fast router per test_router
 
 
 def test_wake_detector_real_model_hey_omi():
@@ -152,7 +167,7 @@ async def test_wake_listener_captures_command_and_runs_turn(tmp_path):
 
     listener = wake.WakeListener(
         session,
-        config.WakeConfig(enabled=True, chime=True),
+        config.WakeConfig(enabled=True, chime=True, conversational=False),
         broadcast=broadcast,
         audio_in_factory=lambda: audio,
         detector=_ScriptedDetector(trigger_at=2),
@@ -269,3 +284,127 @@ async def test_daemon_live_toggle_wake_enabled(tmp_path):
     finally:
         await daemon.close()
         shutil.rmtree(sock_dir, ignore_errors=True)
+
+
+class _MultiTurnSTT:
+    def __init__(self, texts: list[str]) -> None:
+        self._texts = list(texts)
+
+    def transcribe(self, pcm: np.ndarray) -> str:
+        return self._texts.pop(0) if self._texts else ""
+
+
+@pytest.mark.asyncio
+async def test_conversational_mode_continues_until_goodbye(tmp_path):
+    from hark import router
+
+    events: list[dict] = []
+
+    async def broadcast(ev: dict) -> None:
+        events.append(ev)
+
+    session = Session(
+        stt=_MultiTurnSTT(["how are you", "see ya"]),
+        tts=FakeTTS(),
+        brain=FakeBrain(lambda text: [(0.0, TextDelta(f"Reply to {text}")), (0.0, TurnDone())]),
+        registry=ToolRegistry(),
+        router=router.route,
+        out=CaptureOut(),
+        emit=broadcast,
+        state_dir=tmp_path,
+    )
+    await session.start()
+    chunks = [np.ones(512, dtype=np.float32) * 0.05 for _ in range(300)]
+    listener = wake.WakeListener(
+        session,
+        config.WakeConfig(enabled=True, chime=False, conversational=True, followup_timeout_s=2.0),
+        broadcast=broadcast,
+        audio_in_factory=lambda: _FakeStreamAudioIn(chunks),
+        detector=_ScriptedDetector(trigger_at=1),
+        vad_factory=lambda: _ScriptedVAD(speak_chunks=2, end_after=3),
+        post_speech_cooldown_s=0.02,
+    )
+    await listener.start()
+    try:
+        for _ in range(120):
+            if any(e.get("event") == "wake" and e.get("conversing") is False for e in events):
+                break
+            await asyncio.sleep(0.02)
+        replies = [e["text"] for e in events if e.get("event") == "transcript" and e.get("role") == "assistant"]
+        assert replies == ["Reply to how are you", "See ya."]
+        assert listener.conversing is False
+        assert any(e.get("event") == "wake" and e.get("conversing") is False for e in events)
+    finally:
+        await listener.stop()
+        await session.close()
+
+
+class _OneTurnThenSilentVAD:
+    def __init__(self) -> None:
+        self.turn = 0
+        self.count = 0
+        self.speaking = False
+        self.ended = False
+
+    def reset(self) -> None:
+        self.turn += 1
+        self.count = 0
+        self.speaking = False
+        self.ended = False
+
+    def feed(self, chunk: np.ndarray) -> None:
+        self.count += 1
+        if self.turn == 1:
+            self.speaking = self.count <= 2
+            if self.count >= 3:
+                self.ended = True
+        else:
+            self.speaking = False
+
+
+@pytest.mark.asyncio
+async def test_conversational_mode_drops_on_prolonged_silence(tmp_path):
+    events: list[dict] = []
+    sleep_chimes: list[bool] = []
+
+    async def broadcast(ev: dict) -> None:
+        events.append(ev)
+
+    async def fake_sleep_chime() -> None:
+        sleep_chimes.append(True)
+
+    session = Session(
+        stt=FakeSTT("hello"),
+        tts=FakeTTS(),
+        brain=FakeBrain(lambda _: [(0.0, TextDelta("Hi there.")), (0.0, TurnDone())]),
+        registry=ToolRegistry(),
+        router=lambda _: None,
+        out=CaptureOut(),
+        emit=broadcast,
+        state_dir=tmp_path,
+    )
+    await session.start()
+    chunks = [np.zeros(512, dtype=np.float32) for _ in range(60)]
+    listener = wake.WakeListener(
+        session,
+        config.WakeConfig(enabled=True, chime=True, conversational=True, followup_timeout_s=0.06),
+        broadcast=broadcast,
+        audio_in_factory=lambda: _FakeStreamAudioIn(chunks),
+        detector=_ScriptedDetector(trigger_at=1),
+        vad_factory=_OneTurnThenSilentVAD,
+        chime_fn=lambda: asyncio.sleep(0),
+        sleep_chime_fn=fake_sleep_chime,
+        post_speech_cooldown_s=0.01,
+    )
+    await listener.start()
+    try:
+        for _ in range(120):
+            if any(e.get("event") == "wake" and e.get("conversing") is False for e in events):
+                break
+            await asyncio.sleep(0.02)
+        assert listener.conversing is False
+        assert sleep_chimes == [True]
+        assert session.state is State.IDLE
+    finally:
+        await listener.stop()
+        await session.close()

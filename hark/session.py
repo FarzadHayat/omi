@@ -584,6 +584,10 @@ class Session:
     ) -> None:
         if route.tool == "stop":
             return  # run_turn already cut the previous turn; a spoken "stop" says nothing
+        if route.tool == "goodbye":
+            timing["first_text_ms"] = ms()
+            speaker.say(clean_for_speech(route.ack or "See ya."))
+            return
         await self._set_state(State.ACTING, turn)
         await self._emit_turn(turn, {"event": "tool", "phase": "start", "name": route.tool, "args": route.args})
         result = await self.registry.call(route.tool, route.args)

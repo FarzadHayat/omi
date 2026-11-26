@@ -1,9 +1,11 @@
-"""Always-on local wake word detector ("Hey Omi") using sherpa-onnx KeywordSpotter
-and Silero VAD for hands-free end-of-turn capture.
+"""Always-on local wake word detector ("Hey Omi") with continuous phone-call
+conversation mode using sherpa-onnx KeywordSpotter and Silero VAD.
 
 Runs completely locally on CPU (~1.7% of one core) using the 3.3M GigaSpeech
-streaming Zipformer KWS model. Supports any custom English wake phrase via BPE
-tokenization against the model's `tokens.txt`.
+streaming Zipformer KWS model. Once woken, Omi stays in conversational mode —
+automatically listening again after every response until you say a farewell
+("goodbye", "see ya", "that's all", "stop listening", ...) or stay silent for
+`followup_timeout_s` seconds.
 """
 
 from __future__ import annotations
@@ -45,14 +47,40 @@ MODEL_FILES = (
     "tokens.txt",
 )
 
-# Phonetic spelling helpers for Omi so varied accents trigger reliably without false positives.
+# Phonetic spelling helpers for Omi so varied accents and softer speech trigger reliably
+# while keeping false positives near zero (benchmarked 31/32 TP, 0/24 FP at thresh=0.15).
 _PHONETIC_ALIASES: dict[str, tuple[str, ...]] = {
-    "hey omi": ("hey omi", "hey oh me", "hey omy"),
-    "okay omi": ("okay omi", "ok omi", "okay oh me"),
-    "ok omi": ("ok omi", "okay omi"),
+    "hey omi": ("hey omi", "hey oh me", "hey omy", "hey omie", "hey omee", "hey ohmi"),
+    "okay omi": ("okay omi", "ok omi", "okay oh me", "okay omie"),
+    "ok omi": ("ok omi", "okay omi", "okay oh me", "okay omie"),
 }
 
-POST_SPEECH_COOLDOWN_S = 0.7
+POST_SPEECH_COOLDOWN_S = 0.55
+CONFIRM_REOPEN_DELAY_S = 1.2
+QUIET_RMS_THRESHOLD = 0.008
+QUIET_RESET_S = 2.5
+
+_GOODBYE_RE = re.compile(
+    r"^(?:(?:ok(?:ay)?|alright|all right|thanks?|thank you)(?:\s+omi)?\s+)*"
+    r"(?:good\s*bye|bye(?:\s+bye)?|see\s+(?:ya|you)(?:\s+later)?|"
+    r"talk\s+(?:to\s+you\s+)?later|catch\s+you\s+later|"
+    r"that(?:'s| is)\s+(?:all|it)(?:\s+for\s+now)?|"
+    r"(?:i(?:'m| am)|we(?:'re| are))\s+(?:done|good|all\s+set)|"
+    r"all\s+(?:done|good)|nothing\s+else|"
+    r"end\s+(?:the\s+)?call|hang\s+up|stop\s+listening|go\s+to\s+sleep|dismiss|"
+    r"stop|stop\s+talking|never\s*mind|cancel|be\s+quiet|shut\s+up)"
+    r"(?:\s+(?:omi|please|thanks|thank\s+you|now|for\s+now))*$",
+    re.I,
+)
+
+
+def is_goodbye(text: str) -> bool:
+    """True when a short spoken utterance ends an active hands-free conversation."""
+    clean = re.sub(r"[^a-zA-Z0-9'\s]+", " ", text.replace("’", "'")).strip()
+    clean = re.sub(r"\s+", " ", clean)
+    if not clean or len(clean.split()) > 7:
+        return False
+    return bool(_GOODBYE_RE.fullmatch(clean))
 
 
 class Detector(Protocol):
@@ -80,8 +108,7 @@ def ensure_model(model_dir: str | Path) -> Path:
         with urllib.request.urlopen(MODEL_URL, timeout=120) as src, archive.open("wb") as dst:
             shutil.copyfileobj(src, dst)
         with tarfile.open(archive, "r:bz2") as tf:
-            members = tf.getmembers()
-            for m in members:
+            for m in tf.getmembers():
                 parts = Path(m.name).parts
                 if len(parts) < 2:
                     continue
@@ -169,16 +196,25 @@ def build_keywords_text(phrases: list[str] | tuple[str, ...], tokens_path: Path)
     return "\n".join(lines) + "\n"
 
 
-def wake_chime_pcm(sample_rate: int = SAMPLE_RATE) -> np.ndarray:
-    """Gentle 95 ms rising two-tone chime (660 Hz -> 880 Hz) confirming Omi woke up."""
+def _two_tone_chime(f1: float, f2: float, sample_rate: int = SAMPLE_RATE) -> np.ndarray:
     dur1, dur2 = 0.045, 0.050
     t1 = np.arange(int(sample_rate * dur1), dtype=np.float32) / sample_rate
     t2 = np.arange(int(sample_rate * dur2), dtype=np.float32) / sample_rate
     env1 = np.hanning(len(t1)).astype(np.float32)
     env2 = np.hanning(len(t2)).astype(np.float32)
-    tone1 = 0.11 * env1 * np.sin(2.0 * np.pi * 660.0 * t1)
-    tone2 = 0.11 * env2 * np.sin(2.0 * np.pi * 880.0 * t2)
+    tone1 = 0.11 * env1 * np.sin(2.0 * np.pi * f1 * t1)
+    tone2 = 0.11 * env2 * np.sin(2.0 * np.pi * f2 * t2)
     return np.concatenate([tone1, tone2]).astype(np.float32)
+
+
+def wake_chime_pcm(sample_rate: int = SAMPLE_RATE) -> np.ndarray:
+    """Gentle 95 ms rising two-tone chime (660 Hz -> 880 Hz) confirming Omi woke up."""
+    return _two_tone_chime(660.0, 880.0, sample_rate)
+
+
+def sleep_chime_pcm(sample_rate: int = SAMPLE_RATE) -> np.ndarray:
+    """Gentle 95 ms descending two-tone chime (660 Hz -> 440 Hz) when call mode ends."""
+    return _two_tone_chime(660.0, 440.0, sample_rate)
 
 
 class WakeDetector:
@@ -225,8 +261,9 @@ class WakeDetector:
 
 
 class WakeListener:
-    """Background continuous listener: spots the wake word, captures the spoken
-    command until Silero VAD detects end-of-turn, and hands it to Session."""
+    """Background continuous listener: spots the wake word, enters continuous phone-call
+    conversation mode (keeping the mic open for follow-up turns after each reply), and
+    drops back to wake-word standby on a farewell phrase or prolonged silence."""
 
     def __init__(
         self,
@@ -241,6 +278,8 @@ class WakeListener:
         detector: Detector | None = None,
         vad_factory: Callable[[], Endpoint] | None = None,
         chime_fn: Callable[[], Awaitable[None]] | None = None,
+        sleep_chime_fn: Callable[[], Awaitable[None]] | None = None,
+        post_speech_cooldown_s: float = POST_SPEECH_COOLDOWN_S,
     ) -> None:
         self.session = session
         self.cfg = cfg
@@ -252,11 +291,14 @@ class WakeListener:
         self._detector = detector
         self._vad_factory = vad_factory or (lambda: EndpointDetector(silence_ms=cfg.silence_ms))
         self._chime_fn = chime_fn
+        self._sleep_chime_fn = sleep_chime_fn
+        self._post_speech_cooldown_s = post_speech_cooldown_s
         self._vad: Endpoint | None = None
         self._audio: AudioIn | None = None
         self._task: asyncio.Task[None] | None = None
         self._pool: ThreadPoolExecutor | None = None
         self._running = False
+        self.conversing = False
         self.error: str | None = None
 
     @property
@@ -279,6 +321,7 @@ class WakeListener:
 
     async def stop(self) -> None:
         self._running = False
+        self.conversing = False
         if self._audio is not None:
             with contextlib.suppress(Exception):
                 await self._audio.stop()
@@ -292,23 +335,31 @@ class WakeListener:
             self._pool.shutdown(wait=False, cancel_futures=True)
             self._pool = None
 
-    async def _play_chime(self) -> None:
+    async def _play_tone(self, pcm_fn: Callable[[int], np.ndarray], hook: Callable[[], Awaitable[None]] | None) -> None:
         if not self.cfg.chime or self.audio_sink == "null":
             return
-        if self._chime_fn is not None:
+        if hook is not None:
             with contextlib.suppress(Exception):
-                await self._chime_fn()
+                await hook()
             return
         out = PipeWireOut(self.audio_sink)
         try:
             await out.start(SAMPLE_RATE)
-            await out.write(wake_chime_pcm(SAMPLE_RATE))
+            await out.write(pcm_fn(SAMPLE_RATE))
             await out.drain()
         except Exception:
             log.debug("wake chime failed", exc_info=True)
         finally:
             with contextlib.suppress(Exception):
                 await out.stop()
+
+    async def _end_conversation(self, *, chime: bool = False) -> None:
+        was = self.conversing
+        self.conversing = False
+        if chime:
+            asyncio.create_task(self._play_tone(sleep_chime_pcm, self._sleep_chime_fn))
+        if was and self._broadcast is not None:
+            await self._broadcast({"event": "wake", "conversing": False})
 
     async def _run(self) -> None:
         assert self._detector is not None and self._vad is not None and self._pool is not None
@@ -329,9 +380,25 @@ class WakeListener:
             capturing = False
             speech_seen = False
             capture_started = 0.0
+            active_timeout = self.cfg.initial_timeout_s
             cooldown_until = 0.0
+            reopen_at: float | None = None
+            confirm_reopen_at: float | None = None
             was_busy = False
+            audio_seen_since_reset = False
+            quiet_since: float | None = None
             turn_task: asyncio.Task[Any] | None = None
+
+            async def start_capture(timeout_s: float) -> None:
+                nonlocal capturing, speech_seen, capture_started, active_timeout, reopen_at, confirm_reopen_at
+                reopen_at = None
+                confirm_reopen_at = None
+                await self.session.begin_utterance()
+                await loop.run_in_executor(self._pool, self._vad.reset)
+                capturing = True
+                speech_seen = False
+                capture_started = monotonic()
+                active_timeout = timeout_s
 
             try:
                 while self._running:
@@ -339,15 +406,39 @@ class WakeListener:
                     if chunk is None:
                         break
                     now = monotonic()
-                    busy = (
-                        self._is_ptt_active()
-                        or (turn_task is not None and not turn_task.done())
-                        or self.session.state in (State.SPEAKING, State.THINKING, State.ACTING)
-                    )
-                    if capturing:
-                        # Abort wake capture if PTT took over or the user pressed Stop.
-                        if self._is_ptt_active() or self.session._utt is None:
+
+                    # Collect completed turn result to decide whether to continue the call.
+                    if turn_task is not None and turn_task.done():
+                        res = None
+                        with contextlib.suppress(Exception):
+                            res = turn_task.result()
+                        turn_task = None
+                        if self.conversing:
+                            user_text = getattr(res, "user_text", "") if res is not None else ""
+                            cancelled = bool(getattr(res, "cancelled", False)) if res is not None else False
+                            if cancelled or not user_text or is_goodbye(user_text) or not self.cfg.conversational:
+                                await self._end_conversation(chime=False)
+                                cooldown_until = now + self._post_speech_cooldown_s
+                                await loop.run_in_executor(self._pool, self._detector.reset)
+                            else:
+                                reopen_at = now + self._post_speech_cooldown_s
+
+                    # If user took over with PTT, drop continuous call mode cleanly.
+                    if self._is_ptt_active():
+                        if capturing:
                             capturing = False
+                        if self.conversing:
+                            await self._end_conversation(chime=False)
+                        reopen_at = None
+                        confirm_reopen_at = None
+                        was_busy = True
+                        continue
+
+                    if capturing:
+                        # User pressed Stop (or another turn cancelled the open utterance).
+                        if self.session._utt is None:
+                            capturing = False
+                            await self._end_conversation(chime=False)
                             await loop.run_in_executor(self._pool, self._detector.reset)
                             cooldown_until = now + 0.3
                             continue
@@ -361,39 +452,76 @@ class WakeListener:
                             await loop.run_in_executor(self._pool, self._detector.reset)
                             if speech_seen:
                                 turn_task = asyncio.create_task(self.session.end_utterance())
-                                cooldown_until = now + POST_SPEECH_COOLDOWN_S
+                                cooldown_until = now + self._post_speech_cooldown_s
                             else:
                                 await self.session.cancel_utterance()
+                                await self._end_conversation(chime=self.conversing)
                                 cooldown_until = now + 0.3
-                        elif not speech_seen and elapsed >= self.cfg.initial_timeout_s:
+                        elif not speech_seen and elapsed >= active_timeout:
                             capturing = False
                             await self.session.cancel_utterance()
+                            await self._end_conversation(chime=self.conversing)
                             await loop.run_in_executor(self._pool, self._detector.reset)
                             cooldown_until = now + 0.3
                         continue
 
+                    # Hands-free voice confirmation during an active call: open mic once question is spoken.
+                    if self.conversing and self.session.state is State.CONFIRMING and self.session._utt is None:
+                        if confirm_reopen_at is None:
+                            confirm_reopen_at = now + CONFIRM_REOPEN_DELAY_S
+                        elif now >= confirm_reopen_at:
+                            await start_capture(self.cfg.followup_timeout_s)
+                        continue
+                    confirm_reopen_at = None
+
+                    busy = (
+                        (turn_task is not None and not turn_task.done())
+                        or self.session.state in (State.SPEAKING, State.THINKING, State.ACTING)
+                    )
                     if busy:
                         was_busy = True
                         continue
+
+                    # Active phone-call follow-up: reopen mic automatically once reply audio settles.
+                    if self.conversing and reopen_at is not None:
+                        if now >= reopen_at:
+                            await start_capture(self.cfg.followup_timeout_s)
+                        continue
+
                     if was_busy:
                         was_busy = False
-                        cooldown_until = max(cooldown_until, now + POST_SPEECH_COOLDOWN_S)
+                        cooldown_until = max(cooldown_until, now + self._post_speech_cooldown_s)
                         await loop.run_in_executor(self._pool, self._detector.reset)
+                        audio_seen_since_reset = False
+                        quiet_since = None
                         continue
                     if now < cooldown_until:
                         continue
 
+                    # Periodically reset the streaming KWS decoder after quiet stretches so
+                    # long-running background noise never degrades wake sensitivity.
+                    rms = float(np.sqrt(np.mean(np.square(chunk, dtype=np.float32)))) if len(chunk) else 0.0
+                    if rms >= QUIET_RMS_THRESHOLD:
+                        audio_seen_since_reset = True
+                        quiet_since = None
+                    elif audio_seen_since_reset:
+                        if quiet_since is None:
+                            quiet_since = now
+                        elif now - quiet_since >= QUIET_RESET_S:
+                            await loop.run_in_executor(self._pool, self._detector.reset)
+                            audio_seen_since_reset = False
+                            quiet_since = None
+
                     hit = await loop.run_in_executor(self._pool, self._detector.feed, chunk)
                     if hit:
                         log.info("wake word detected: %s", hit)
+                        self.conversing = bool(self.cfg.conversational)
                         if self._broadcast is not None:
-                            await self._broadcast({"event": "wake", "phrase": hit})
-                        asyncio.create_task(self._play_chime())
-                        await self.session.begin_utterance()
-                        await loop.run_in_executor(self._pool, self._vad.reset)
-                        capturing = True
-                        speech_seen = False
-                        capture_started = monotonic()
+                            await self._broadcast({"event": "wake", "phrase": hit, "conversing": self.conversing})
+                        asyncio.create_task(self._play_tone(wake_chime_pcm, self._chime_fn))
+                        audio_seen_since_reset = False
+                        quiet_since = None
+                        await start_capture(self.cfg.initial_timeout_s)
             except asyncio.CancelledError:
                 if capturing:
                     with contextlib.suppress(Exception):
@@ -403,6 +531,7 @@ class WakeListener:
                 log.exception("wake listener loop error")
                 await asyncio.sleep(1.0)
             finally:
+                self.conversing = False
                 with contextlib.suppress(Exception):
                     await audio.stop()
                 if self._audio is audio:

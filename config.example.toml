@@ -11,11 +11,13 @@ silence_ms = 300   # Hands-free silence window in milliseconds
 [wake]
 enabled = true
 phrases = ["hey omi", "okay omi"]
-threshold = 0.25         # Higher = stricter (fewer false triggers), lower = more sensitive
+threshold = 0.15         # Lower = more sensitive (0.10-0.25), higher = stricter
 score = 1.0              # Keyword boost score
-silence_ms = 650         # End-of-turn silence after speaking a wake-word command
-initial_timeout_s = 3.5  # Cancel if nothing is said after waking Omi
-chime = true             # Play a soft chime when Omi wakes up
+silence_ms = 750         # End-of-turn silence while speaking a command
+initial_timeout_s = 4.0  # Cancel if nothing is said right after waking Omi
+conversational = true    # Keep listening after each reply (phone-call mode)
+followup_timeout_s = 12.0  # Prolonged silence ends the conversation automatically
+chime = true             # Soft rising chime on wake, descending chime on call end
 
 [stt]
 engine = "nemotron"  # "nemotron" (streaming) | "moonshine"

@@ -163,10 +163,12 @@ class WakeConfig:
     enabled: bool = True
     phrases: list[str] = field(default_factory=lambda: ["hey omi", "okay omi"])
     model_dir: str = _model_path("kws-gigaspeech-3.3M")
-    threshold: float = 0.25
+    threshold: float = 0.15
     score: float = 1.0
-    silence_ms: int = 650  # hands-free end-of-turn pause after wake word
-    initial_timeout_s: float = 3.5  # cancel if nothing is said after wake word
+    silence_ms: int = 750  # hands-free end-of-turn pause while speaking
+    initial_timeout_s: float = 4.0  # cancel if nothing is said right after wake word
+    conversational: bool = True  # keep listening after each reply like a phone call
+    followup_timeout_s: float = 12.0  # drop back to standby after this much silence in call mode
     max_utterance_s: float = 15.0
     chime: bool = True
 
