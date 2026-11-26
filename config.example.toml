@@ -8,6 +8,15 @@ source = ""        # PipeWire mic source name; empty = default microphone
 sink = ""          # PipeWire output sink; empty = default output ("null" = silent)
 silence_ms = 300   # Hands-free silence window in milliseconds
 
+[wake]
+enabled = true
+phrases = ["hey omi", "okay omi"]
+threshold = 0.25         # Higher = stricter (fewer false triggers), lower = more sensitive
+score = 1.0              # Keyword boost score
+silence_ms = 650         # End-of-turn silence after speaking a wake-word command
+initial_timeout_s = 3.5  # Cancel if nothing is said after waking Omi
+chime = true             # Play a soft chime when Omi wakes up
+
 [stt]
 engine = "nemotron"  # "nemotron" (streaming) | "moonshine"
 threads = 4

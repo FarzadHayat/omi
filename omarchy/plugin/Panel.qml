@@ -206,7 +206,7 @@ Panel {
             Text {
               Layout.fillWidth: true
               textFormat: Text.PlainText
-              text: root.phase === "offline" ? strings.t("hint.offline") : strings.t("hint.talk")
+              text: root.phase === "offline" ? strings.t("hint.offline") : (omi.wakeEnabled ? strings.t("hint.wake") : strings.t("hint.talk"))
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -409,6 +409,18 @@ Panel {
             fontFamily: root.fontFamily
             onHovered: function(on) { if (on) root.setRowCursor("stop") }
             onClicked: omi.stop()
+            Accessible.role: Accessible.Button
+            Accessible.name: text
+          }
+
+          Button {
+            objectName: "wakeButton"
+            text: omi.wakeEnabled ? strings.t("wake.on") : strings.t("wake.off")
+            bordered: true
+            enabled: omi.connected
+            foreground: omi.wakeEnabled ? Commons.Color.accent : root.dim
+            fontFamily: root.fontFamily
+            onClicked: omi.toggleWake()
             Accessible.role: Accessible.Button
             Accessible.name: text
           }

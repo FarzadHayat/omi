@@ -117,8 +117,9 @@ class PipeWireOut:
 class PipeWireIn:
     """Reads raw f32 mono 16 kHz from `pw-record`. Empty source means the default mic."""
 
-    def __init__(self, source: str = "") -> None:
+    def __init__(self, source: str = "", *, keep_chunks: bool = True) -> None:
         self.source = source
+        self.keep_chunks = keep_chunks
         self.error: str | None = None  # why the last recording got no audio
         self._proc: asyncio.subprocess.Process | None = None
         self._queue: asyncio.Queue[np.ndarray | None] = asyncio.Queue()
@@ -159,12 +160,14 @@ class PipeWireIn:
             while True:
                 data = await stdout.readexactly(size)
                 chunk = np.frombuffer(data, dtype="<f4").copy()
-                self._chunks.append(chunk)
+                if self.keep_chunks:
+                    self._chunks.append(chunk)
                 self._queue.put_nowait(chunk)
         except asyncio.IncompleteReadError as err:
             if err.partial:
                 chunk = np.frombuffer(err.partial[: len(err.partial) // 4 * 4], dtype="<f4").copy()
-                self._chunks.append(chunk)
+                if self.keep_chunks:
+                    self._chunks.append(chunk)
                 self._queue.put_nowait(chunk)
         finally:
             self._queue.put_nowait(None)

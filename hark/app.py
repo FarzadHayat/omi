@@ -192,6 +192,16 @@ async def build(cfg: Config) -> Daemon:
         from hark.web.server import WebServer
 
         daemon.web = WebServer(daemon, cfg.web)
+    from hark.audio.wake import WakeListener
+
+    daemon.wake = WakeListener(
+        session,
+        cfg.wake,
+        audio_source=cfg.audio.source,
+        audio_sink=cfg.audio.sink,
+        is_ptt_active=lambda: daemon._listening,
+        broadcast=daemon.broadcast,
+    )
     return daemon
 
 

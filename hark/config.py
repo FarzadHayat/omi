@@ -149,9 +149,23 @@ class WebConfig:
 
 
 @dataclass
+class WakeConfig:
+    enabled: bool = True
+    phrases: list[str] = field(default_factory=lambda: ["hey omi", "okay omi"])
+    model_dir: str = _model_path("kws-gigaspeech-3.3M")
+    threshold: float = 0.25
+    score: float = 1.0
+    silence_ms: int = 650  # hands-free end-of-turn pause after wake word
+    initial_timeout_s: float = 3.5  # cancel if nothing is said after wake word
+    max_utterance_s: float = 15.0
+    chime: bool = True
+
+
+@dataclass
 class Config:
     name: str = "Omi"  # what the assistant calls itself
     audio: AudioConfig = field(default_factory=AudioConfig)
+    wake: WakeConfig = field(default_factory=WakeConfig)
     stt: SttConfig = field(default_factory=SttConfig)
     tts: TtsConfig = field(default_factory=TtsConfig)
     brain: BrainConfig = field(default_factory=BrainConfig)

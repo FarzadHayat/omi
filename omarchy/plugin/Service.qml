@@ -26,6 +26,7 @@ Item {
   property real cursorX: 0
   property real cursorY: 0
   property bool hasCursor: false
+  property bool wakeEnabled: false
   property string _pendingSay: ""
 
   function receive(line) {
@@ -75,11 +76,14 @@ Item {
       } else {
         mascotTimer.stop()
       }
+    } else if (ev === "wake") {
+      if (typeof msg.enabled === "boolean") wakeEnabled = msg.enabled
     } else if (ev === "confirm_request") {
       confirm = Model.confirmOf(msg)
     } else if (ev === undefined && msg.ok === true && typeof msg.state === "string") {
       phase = Model.knownState(msg.state)
       confirm = Model.confirmOf(msg.confirm)
+      if (msg.wake && typeof msg.wake.enabled === "boolean") wakeEnabled = msg.wake.enabled
     } else if (ev === undefined && msg.ok === false) {
       flash(Model.clip(msg.error, 300))
     }
@@ -105,6 +109,10 @@ Item {
   function stop() {
     clearMascot()
     send(Model.request("stop"))
+  }
+
+  function toggleWake() {
+    send(Model.request("set", { key: "wake.enabled", value: wakeEnabled ? "off" : "on" }))
   }
 
   // Answers exactly the question on screen: the daemon refuses an id that is no

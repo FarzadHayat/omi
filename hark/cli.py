@@ -90,6 +90,11 @@ def _print_status(msg: dict[str, Any]) -> None:
     print(f"state: {msg.get('state')}{'' if msg.get('ready', True) else ' (warming up)'}")
     print(f"talker: {msg.get('talker')}  worker: {msg.get('worker')}")
     print(f"stt: {engines.get('stt')}  tts: {engines.get('tts')}{voice}")
+    wake = msg.get("wake") or {}
+    if wake:
+        phrases = ", ".join(wake.get("phrases") or [])
+        state = f"on ({phrases})" if wake.get("enabled") else ("starting" if wake.get("configured") and not msg.get("ready", True) else "off")
+        print(f"wake: {state}")
     print(f"session: {msg.get('session_id')}")
     if msg.get("confirm"):
         print(f"waiting for yes or no: {msg['confirm']['question']}")
@@ -156,7 +161,7 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("status", help="show daemon state")
     sub.add_parser("yes", help="approve the pending confirmation")
     sub.add_parser("no", help="refuse the pending confirmation")
-    st = sub.add_parser("set", help="change a setting live (brain.talker, tts.engine, tts.voice, stt.engine)")
+    st = sub.add_parser("set", help="change a setting live (brain.talker, tts.engine, tts.voice, stt.engine, wake.enabled)")
     st.add_argument("key")
     st.add_argument("value")
     pt = sub.add_parser("point", help="move Omi on screen to point at (x, y)")

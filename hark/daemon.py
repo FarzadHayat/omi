@@ -153,10 +153,12 @@ class Daemon:
         idle_jobs: list[Job] | None = None,
         errors: dict[str, str] | None = None,
         web: Any = None,
+        wake: Any = None,
         track_cursor: bool = False,
     ) -> None:
         self.session = session
         self.web = web  # phone and tablet server (hark.web.server.WebServer), started with the socket
+        self.wake = wake  # optional always-on WakeListener (hark.audio.wake.WakeListener)
         self.cfg = cfg
         self.audio_in = audio_in
         self.factories = factories or {}
@@ -241,6 +243,12 @@ class Daemon:
                 log.error("warm-up of %s failed: %s", name, r)
                 self.errors[name] = str(r) or type(r).__name__
         self.ready.set()
+        if self.wake is not None and self.cfg.wake.enabled:
+            try:
+                await self.wake.start()
+            except Exception as exc:
+                log.error("wake word failed to start: %s", exc)
+                self.errors["wake"] = str(exc) or type(exc).__name__
         self._jobs = [asyncio.create_task(self._when_idle(job)) for job in self.idle_jobs]
 
     async def _when_idle(self, job: Job, attempts: int = 5) -> None:
@@ -292,6 +300,8 @@ class Daemon:
         self._subs.clear()
         if self.web is not None:
             await _quietly(self.web.close())
+        if self.wake is not None:
+            await _quietly(self.wake.stop())
         if self._warm_task is not None:
             self._warm_task.cancel()
         if self._cursor_task is not None:
@@ -427,7 +437,7 @@ class Daemon:
                 final["error"] = f"no audio came in: {mic_error}"
             return final
         if cmd == "stop":
-            if await self.release_mic():
+            if await self.release_mic() or s._utt is not None:
                 await s.cancel_utterance()
             await s.stop()
             return {"ok": True}
@@ -506,6 +516,8 @@ class Daemon:
                 errors["talker"] = s.brain.error
         if out_error := getattr(s.out, "error", None):
             errors["speaker"] = out_error
+        if self.wake is not None and getattr(self.wake, "error", None):
+            errors["wake"] = self.wake.error
         return {
             "ok": True,
             "name": self.cfg.name,
@@ -513,6 +525,11 @@ class Daemon:
             "ready": self.ready.is_set(),
             "talker": self.cfg.brain.talker,
             "worker": self.cfg.brain.worker if s.worker is not None else "off",
+            "wake": {
+                "enabled": bool(self.cfg.wake.enabled and self.wake is not None and self.wake.active),
+                "configured": self.cfg.wake.enabled,
+                "phrases": list(self.cfg.wake.phrases),
+            },
             "engines": {
                 "stt": self.cfg.stt.engine,
                 "tts": self.cfg.tts.engine,
@@ -525,8 +542,31 @@ class Daemon:
         }
 
     async def _set(self, key: Any, value: Any) -> dict[str, Any]:
+        if key == "wake.enabled":
+            if self.wake is None:
+                raise RequestError("wake.enabled cannot be changed live (no wake listener)")
+            raw = str(value).strip().lower() if isinstance(value, (str, bool)) else ""
+            if raw in ("true", "on", "1", "yes"):
+                want = True
+            elif raw in ("false", "off", "0", "no"):
+                want = False
+            else:
+                raise RequestError("wake.enabled expects on or off")
+            if want:
+                try:
+                    await self.wake.start()
+                except Exception as exc:
+                    self.errors["wake"] = str(exc) or type(exc).__name__
+                    raise RequestError(f"could not start wake word: {exc}") from exc
+                self.errors.pop("wake", None)
+            else:
+                await self.wake.stop()
+                self.errors.pop("wake", None)
+            self.cfg.wake.enabled = want
+            await self.broadcast({"event": "wake", "enabled": want})
+            return {"ok": True, "key": key, "value": "on" if want else "off"}
         if key not in SETTABLE:
-            raise RequestError(f"cannot set {key}; settable: {', '.join(SETTABLE)}")
+            raise RequestError(f"cannot set {key}; settable: {', '.join((*SETTABLE, 'wake.enabled'))}")
         if not isinstance(value, str) or not value:
             raise RequestError("set needs a string value")
         factory = self.factories.get(key)

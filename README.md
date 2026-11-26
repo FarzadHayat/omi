@@ -6,7 +6,7 @@ A local-first voice assistant and animated on-screen companion for Omarchy & Hyp
 
 ## Features
 
-- **Fast voice loop**: Streaming local STT (`nemotron` via `sherpa-onnx`, or `moonshine`) and neural local TTS (`kokoro` v1.0, or `piper`), with instant regex/alias routing for common desktop commands.
+- **Fast voice loop + local wake word**: Always-on **"Hey Omi"** / **"Okay Omi"** wake word (`sherpa-onnx` 3.3M streaming keyword spotter + Silero VAD, ~1.7% CPU, toggleable live), streaming local STT (`nemotron` or `moonshine`), and neural local TTS (`kokoro` v1.0 or `piper`).
 - **Animated companion mascot**: Lives in the Omarchy bar and pops up as a click-through floating overlay with speech bubbles, pointing/highlighting (`point_at`, `highlight_window`), and cursor-following eyes.
 - **Follows your Omarchy theme live**: Bar icon, floating companion, conversation panel, and mobile web PWA automatically adapt to your active Omarchy theme (`Commons.Color` / `~/.local/state/omarchy/current/theme/colors.toml`).
 - **Desktop, browser, terminal & T3 Code control**:
@@ -57,6 +57,7 @@ Download speech models into `~/.local/share/omi/models/` (default locations):
 
 - **Nemotron streaming STT** (`~/.local/share/omi/models/nemotron-streaming-160ms/`): `encoder.int8.onnx`, `decoder.int8.onnx`, `joiner.int8.onnx`, `tokens.txt` (from `sherpa-onnx` `sherpa-onnx-nemotron-speech-streaming-en-0.6b-int8-2026-01-14`)
 - **Kokoro TTS** (`~/.local/share/omi/models/kokoro/`): `kokoro-v1.0.onnx` and `voices-v1.0.bin` (from `kokoro-onnx` releases)
+- **Wake word & VAD** (`kws-gigaspeech-3.3M` + `silero_vad.onnx`): downloaded automatically on first start when `[wake].enabled = true`
 
 Install the Omarchy bar plugin, systemd user service, and Hyprland keybindings:
 
@@ -78,6 +79,7 @@ Live runtime tweaks:
 
 ```bash
 omi set tts.voice bm_george    # switch Kokoro voice live
+omi set wake.enabled off       # pause/resume always-on wake word live
 omi set brain.talker local     # switch to local LLM
 omi say "what's running in my terminal?"
 ```

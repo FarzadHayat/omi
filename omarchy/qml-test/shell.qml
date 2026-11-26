@@ -82,6 +82,7 @@ ShellRoot {
         shell.check("confirm", h.confirm.id === "q-1" && h.confirm.question === "Delete the file notes.txt?", h.confirm)
         shell.check("mascot point", h.mascot !== null && h.mascot.x === 420 && h.mascot.label === "Save button", h.mascot)
         shell.check("cursor tracked", h.hasCursor === true && h.cursorX === 640 && h.cursorY === 420, [h.hasCursor, h.cursorX, h.cursorY])
+        shell.check("wake status", h.wakeEnabled === true, h.wakeEnabled)
         shell.check("companion shown", widget.companion.shown === true && widget.companion.interactive === true, widget.companion.shown)
         shell.check("accessible label", widget.accessibleLabel === "Omi: Waiting for your answer", widget.accessibleLabel)
         widget.open()
