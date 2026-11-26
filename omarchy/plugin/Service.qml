@@ -27,6 +27,13 @@ Item {
   property real cursorY: 0
   property bool hasCursor: false
   property bool wakeEnabled: false
+  property bool wakeConversational: true
+  property string wakeSensitivity: "medium"
+  property string talker: ""
+  property string voice: "af_heart"
+  property var providers: []
+  property var voices: ["af_heart", "af_bella", "am_adam", "bf_emma", "bm_george"]
+  property string healthError: ""
   property string _pendingSay: ""
 
   function receive(line) {
@@ -78,12 +85,34 @@ Item {
       }
     } else if (ev === "wake") {
       if (typeof msg.enabled === "boolean") wakeEnabled = msg.enabled
+    } else if (ev === "settings") {
+      if (typeof msg.talker === "string") talker = msg.talker
+      if (typeof msg.voice === "string" && msg.voice !== "") voice = msg.voice
+      if (msg.wake) {
+        if (typeof msg.wake.enabled === "boolean") wakeEnabled = msg.wake.enabled
+        if (typeof msg.wake.conversational === "boolean") wakeConversational = msg.wake.conversational
+        if (typeof msg.wake.sensitivity === "string") wakeSensitivity = msg.wake.sensitivity
+      }
     } else if (ev === "confirm_request") {
       confirm = Model.confirmOf(msg)
     } else if (ev === undefined && msg.ok === true && typeof msg.state === "string") {
       phase = Model.knownState(msg.state)
       confirm = Model.confirmOf(msg.confirm)
-      if (msg.wake && typeof msg.wake.enabled === "boolean") wakeEnabled = msg.wake.enabled
+      if (typeof msg.talker === "string") talker = msg.talker
+      if (msg.engines && typeof msg.engines.voice === "string" && msg.engines.voice !== "") voice = msg.engines.voice
+      if (Array.isArray(msg.providers)) providers = msg.providers
+      if (Array.isArray(msg.voices) && msg.voices.length > 0) voices = msg.voices
+      if (msg.wake) {
+        if (typeof msg.wake.enabled === "boolean") wakeEnabled = msg.wake.enabled
+        if (typeof msg.wake.conversational === "boolean") wakeConversational = msg.wake.conversational
+        if (typeof msg.wake.sensitivity === "string") wakeSensitivity = msg.wake.sensitivity
+      }
+      var errText = ""
+      if (msg.errors && typeof msg.errors === "object") {
+        var keys = Object.keys(msg.errors)
+        if (keys.length > 0) errText = keys[0] + ": " + Model.clip(msg.errors[keys[0]], 160)
+      }
+      healthError = errText
     } else if (ev === undefined && msg.ok === false) {
       flash(Model.clip(msg.error, 300))
     }
@@ -111,8 +140,33 @@ Item {
     send(Model.request("stop"))
   }
 
+  function setSetting(key, value) {
+    return send(Model.request("set", { key: key, value: value, save: true }))
+  }
+
   function toggleWake() {
-    send(Model.request("set", { key: "wake.enabled", value: wakeEnabled ? "off" : "on" }))
+    return setSetting("wake.enabled", wakeEnabled ? "off" : "on")
+  }
+
+  function toggleCallMode() {
+    return setSetting("wake.conversational", wakeConversational ? "off" : "on")
+  }
+
+  function cycleSensitivity() {
+    var order = ["low", "medium", "high"]
+    var idx = order.indexOf(wakeSensitivity)
+    return setSetting("wake.sensitivity", order[(idx + 1) % order.length])
+  }
+
+  function cycleVoice() {
+    if (!voices || voices.length === 0) return false
+    var idx = voices.indexOf(voice)
+    return setSetting("tts.voice", voices[(idx + 1) % voices.length])
+  }
+
+  function setProvider(name) {
+    if (!name || name === talker) return false
+    return setSetting("brain.talker", name)
   }
 
   // Answers exactly the question on screen: the daemon refuses an id that is no

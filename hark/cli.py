@@ -119,6 +119,8 @@ def _build_request(args: argparse.Namespace) -> dict[str, Any]:
         req = {"cmd": "confirm", "answer": c == "yes"}
     elif c == "set":
         req = {"cmd": "set", "key": args.key, "value": args.value}
+        if getattr(args, "save", False):
+            req["save"] = True
     elif c == "point":
         req = {"cmd": "mascot", "action": "point", "x": args.x, "y": args.y,
                "label": " ".join(args.label), "duration": args.duration}
@@ -162,9 +164,10 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("status", help="show daemon state")
     sub.add_parser("yes", help="approve the pending confirmation")
     sub.add_parser("no", help="refuse the pending confirmation")
-    st = sub.add_parser("set", help="change a setting live (brain.talker, brain.model, tts.engine, tts.voice, stt.engine, wake.enabled)")
+    st = sub.add_parser("set", help="change a setting live (brain.talker, brain.model, tts.voice, wake.enabled, wake.conversational, wake.sensitivity)")
     st.add_argument("key")
     st.add_argument("value")
+    st.add_argument("--save", action="store_true", help="also persist this setting to config.toml")
     sub.add_parser("providers", help="list supported AI providers and which CLIs are installed")
     pt = sub.add_parser("point", help="move Omi on screen to point at (x, y)")
     pt.add_argument("x", type=int)

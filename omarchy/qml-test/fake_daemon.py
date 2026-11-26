@@ -42,8 +42,18 @@ async def main(sock_path: str, log_path: str) -> None:
                 cmd = req.get("cmd")
                 seen.add(cmd)
                 if cmd == "status":
-                    send(writer, {"ok": True, "state": "idle", "ready": True, "confirm": None,
-                                  "wake": {"enabled": True, "phrases": ["hey omi"]}, "errors": {}})
+                    send(writer, {
+                        "ok": True, "state": "idle", "ready": True, "confirm": None,
+                        "talker": "claude",
+                        "engines": {"stt": "nemotron", "tts": "kokoro", "voice": "af_heart"},
+                        "providers": [
+                            {"name": "claude", "installed": True, "model": "haiku"},
+                            {"name": "opencode", "installed": True, "model": "(cli default)"},
+                        ],
+                        "voices": ["af_heart", "af_bella", "am_adam", "bf_emma", "bm_george"],
+                        "wake": {"enabled": True, "conversational": True, "sensitivity": "medium", "phrases": ["hey omi"]},
+                        "errors": {},
+                    })
                 elif cmd == "subscribe":
                     send(writer, {"ok": True, "subscribed": True})
                     subs.append(writer)

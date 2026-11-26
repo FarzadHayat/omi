@@ -13,9 +13,12 @@ The TOML file mirrors the dataclass tree, for example:
 from __future__ import annotations
 
 import os
+import re
+import tempfile
 import tomllib
 from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
+from typing import Any
 
 HOME = Path.home()
 
@@ -206,3 +209,71 @@ def load(path: Path | None = None) -> Config:
         with path.open("rb") as fh:
             _merge(cfg, tomllib.load(fh))
     return cfg
+
+
+def _toml_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return f"{value:g}"
+    if isinstance(value, str):
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+    if isinstance(value, (list, tuple)):
+        return "[" + ", ".join(_toml_value(v) for v in value) + "]"
+    raise ValueError(f"unsupported TOML value: {value!r}")
+
+
+def save_override(section: str, key: str, value: Any, path: Path | None = None) -> Path:
+    """Persist one [section] key = value override into config.toml while keeping
+    existing comments and unrelated settings intact."""
+    target = path or (HOME / ".config/omi/config.toml")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    text = target.read_text(encoding="utf-8") if target.exists() else ""
+    lines = text.splitlines()
+    header = f"[{section}]"
+    entry = f"{key} = {_toml_value(value)}"
+    key_re = re.compile(rf"^\s*{re.escape(key)}\s*=")
+
+    sec_start: int | None = None
+    sec_end = len(lines)
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            if sec_start is not None:
+                sec_end = idx
+                break
+            if stripped == header:
+                sec_start = idx
+
+    if sec_start is None:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.extend([header, entry])
+    else:
+        replaced = False
+        for idx in range(sec_start + 1, sec_end):
+            if key_re.match(lines[idx]):
+                lines[idx] = entry
+                replaced = True
+                break
+        if not replaced:
+            insert_at = sec_end
+            while insert_at > sec_start + 1 and not lines[insert_at - 1].strip():
+                insert_at -= 1
+            lines.insert(insert_at, entry)
+
+    rendered = "\n".join(lines).rstrip("\n") + "\n"
+    # Validate rendered TOML before replacing the user's config file.
+    tomllib.loads(rendered)
+    fd, tmp = tempfile.mkstemp(dir=str(target.parent), prefix=f".{target.name}.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(rendered)
+        os.replace(tmp, target)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+    return target

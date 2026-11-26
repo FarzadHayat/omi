@@ -305,6 +305,13 @@ class WakeListener:
     def active(self) -> bool:
         return self._running and self._task is not None and not self._task.done()
 
+    async def reload_detector(self) -> None:
+        """Rebuild the KWS detector live after a sensitivity/threshold change."""
+        if not self.active or self._pool is None:
+            return
+        loop = asyncio.get_running_loop()
+        self._detector = await loop.run_in_executor(self._pool, WakeDetector, self.cfg)
+
     async def start(self) -> None:
         if self.active:
             return

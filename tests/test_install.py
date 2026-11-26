@@ -339,7 +339,7 @@ def test_bar_widget_runs_against_a_fake_daemon(tmp_path):
     checks = [line[line.index("CHECK "):] for line in output.splitlines() if "CHECK " in line]
     assert "HARNESS DONE" in output, output[-3000:]
     assert checks and all(c.startswith("CHECK pass") for c in checks), "\n".join(checks)
-    assert len(checks) == 16, "\n".join(checks)
+    assert len(checks) == 17, "\n".join(checks)
     for bad in ("TypeError", "ReferenceError", "is not a type", "unavailable", "Cannot assign", "Unable to assign"):
         assert bad not in output, output[-3000:]
     requests = [json.loads(line) for line in log.read_text().splitlines()]

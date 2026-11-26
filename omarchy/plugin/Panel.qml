@@ -41,8 +41,35 @@ Panel {
   // The keyboard cursor walks these rows; Yes and No exist only while a question waits.
   property int rowIndex: 0
   property bool cursorActive: false
+  property bool settingsOpen: false
   readonly property var rows: (omi.confirm ? ["yes", "no"] : []).concat(["input", "stop"])
   readonly property string currentRow: cursorActive ? rows[Math.max(0, Math.min(rowIndex, rows.length - 1))] : ""
+
+  readonly property var installedProviders: {
+    var out = []
+    var list = omi.providers || []
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].installed) out.push(list[i].name)
+    }
+    return out.length > 0 ? out : ["claude", "opencode", "local"]
+  }
+
+  function voiceLabel(id) {
+    var map = {
+      "af_heart": "Heart",
+      "af_bella": "Bella",
+      "am_adam": "Adam",
+      "bf_emma": "Emma",
+      "bm_george": "George"
+    }
+    return map[id] || id
+  }
+
+  function sensitivityLabel(level) {
+    if (level === "high") return strings.t("settings.high")
+    if (level === "low") return strings.t("settings.low")
+    return strings.t("settings.medium")
+  }
 
   function setRowCursor(id) {
     cursorActive = true
@@ -80,6 +107,8 @@ Panel {
     cursorActive = omi.confirm !== null
     rowIndex = 0
     Qt.callLater(function() { transcriptView.positionViewAtEnd() })
+  } else {
+    settingsOpen = false
   }
 
   Connections {
@@ -217,6 +246,31 @@ Panel {
         }
 
         PanelSeparator { Layout.fillWidth: true; foreground: root.foreground }
+
+        // ---- Inline health / setup notice (missing CLI login, mic, model) --
+        BorderSurface {
+          objectName: "healthCard"
+          visible: omi.healthError !== ""
+          Layout.fillWidth: true
+          implicitHeight: healthText.implicitHeight + Style.space(12)
+          color: "transparent"
+          borderSpec: Border.controlSpec("normal", root.urgent, root.urgent)
+          radius: Style.cornerRadius
+
+          Text {
+            id: healthText
+            anchors.fill: parent
+            anchors.margins: Style.space(6)
+            textFormat: Text.PlainText
+            text: omi.healthError
+            color: root.urgent
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.WordWrap
+            Accessible.role: Accessible.StaticText
+            Accessible.name: text
+          }
+        }
 
         // ---- The conversation ---------------------------------------------
         Text {
@@ -428,12 +482,153 @@ Panel {
 
           Item { Layout.fillWidth: true }
 
-          Text {
-            textFormat: Text.PlainText
-            text: strings.t("stop.hint")
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
+          Button {
+            objectName: "settingsButton"
+            text: strings.t("settings.button")
+            bordered: true
+            enabled: omi.connected
+            foreground: root.settingsOpen ? Commons.Color.accent : root.dim
+            fontFamily: root.fontFamily
+            onClicked: root.settingsOpen = !root.settingsOpen
+            Accessible.role: Accessible.Button
+            Accessible.name: strings.t("settings.title")
+          }
+        }
+
+        // ---- Collapsible Settings drawer (persists to config.toml) --------
+        BorderSurface {
+          id: settingsCard
+          objectName: "settingsCard"
+          visible: root.settingsOpen && omi.connected
+          Layout.fillWidth: true
+          implicitHeight: settingsCol.implicitHeight + Style.space(18)
+          color: "transparent"
+          borderSpec: Border.controlSpec("normal", root.dim, Commons.Color.popups.border)
+          radius: Style.cornerRadius
+
+          ColumnLayout {
+            id: settingsCol
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.margins: Style.space(9)
+            spacing: Style.space(8)
+
+            // Provider picker
+            ColumnLayout {
+              Layout.fillWidth: true
+              spacing: Style.space(4)
+
+              Text {
+                textFormat: Text.PlainText
+                text: strings.t("settings.provider").toUpperCase()
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+                font.letterSpacing: 0.8
+              }
+
+              Flow {
+                Layout.fillWidth: true
+                spacing: Style.space(6)
+
+                Repeater {
+                  model: root.installedProviders
+                  delegate: Button {
+                    required property string modelData
+                    text: modelData
+                    bordered: true
+                    foreground: omi.talker === modelData ? Commons.Color.accent : root.foreground
+                    fontFamily: root.fontFamily
+                    onClicked: omi.setProvider(modelData)
+                    Accessible.role: Accessible.Button
+                    Accessible.name: strings.t("settings.provider") + ": " + modelData
+                  }
+                }
+              }
+            }
+
+            // Voice selector
+            RowLayout {
+              Layout.fillWidth: true
+              spacing: Style.space(8)
+
+              Text {
+                textFormat: Text.PlainText
+                text: strings.t("settings.voice")
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+
+              Item { Layout.fillWidth: true }
+
+              Button {
+                objectName: "voiceButton"
+                text: root.voiceLabel(omi.voice)
+                bordered: true
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: omi.cycleVoice()
+                Accessible.role: Accessible.Button
+                Accessible.name: strings.t("settings.voice") + ": " + text
+              }
+            }
+
+            // Continuous call mode toggle
+            RowLayout {
+              Layout.fillWidth: true
+              spacing: Style.space(8)
+
+              Text {
+                textFormat: Text.PlainText
+                text: strings.t("settings.call_mode")
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+
+              Item { Layout.fillWidth: true }
+
+              Button {
+                objectName: "callModeButton"
+                text: omi.wakeConversational ? strings.t("settings.continuous") : strings.t("settings.single_turn")
+                bordered: true
+                foreground: omi.wakeConversational ? Commons.Color.accent : root.dim
+                fontFamily: root.fontFamily
+                onClicked: omi.toggleCallMode()
+                Accessible.role: Accessible.Button
+                Accessible.name: strings.t("settings.call_mode") + ": " + text
+              }
+            }
+
+            // Wake word sensitivity selector
+            RowLayout {
+              Layout.fillWidth: true
+              spacing: Style.space(8)
+
+              Text {
+                textFormat: Text.PlainText
+                text: strings.t("settings.sensitivity")
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+
+              Item { Layout.fillWidth: true }
+
+              Button {
+                objectName: "sensitivityButton"
+                text: root.sensitivityLabel(omi.wakeSensitivity)
+                bordered: true
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: omi.cycleSensitivity()
+                Accessible.role: Accessible.Button
+                Accessible.name: strings.t("settings.sensitivity") + ": " + text
+              }
+            }
           }
         }
       }

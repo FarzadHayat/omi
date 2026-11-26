@@ -81,4 +81,4 @@ WEB_AUDIO_HEADER = "<II"  # struct format: sample rate, seq
 
 COMMANDS = ("say", "wav", "ptt_start", "ptt_stop", "stop", "confirm", "ask_confirm", "tool", "mascot",
             "status", "set", "subscribe")
-EVENTS = ("state", "transcript", "speech", "tool", "confirm_request", "progress", "mascot", "cursor", "wake", "timing")
+EVENTS = ("state", "transcript", "speech", "tool", "confirm_request", "progress", "mascot", "cursor", "wake", "settings", "timing")

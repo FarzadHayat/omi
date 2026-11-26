@@ -203,6 +203,7 @@ async def build(cfg: Config) -> Daemon:
         idle_jobs=[lambda: jobs.profile_if_missing(memory, llm)],
         errors=errors,
         track_cursor=bool(os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")),
+        config_path=config.CONFIG_PATH,
     )
     if cfg.web.enabled:
         from hark.web.server import WebServer

@@ -24,5 +24,16 @@
   "input.placeholder": "Ask Omi anything",
   "input.label": "Request for Omi",
   "stop": "Stop",
-  "stop.hint": "Super+Alt+Esc"
+  "stop.hint": "Super+Alt+Esc",
+  "settings.button": "Settings",
+  "settings.title": "Omi settings",
+  "settings.provider": "Provider",
+  "settings.voice": "Voice",
+  "settings.call_mode": "Call mode",
+  "settings.continuous": "Continuous",
+  "settings.single_turn": "Single turn",
+  "settings.sensitivity": "Wake sensitivity",
+  "settings.low": "Low",
+  "settings.medium": "Medium",
+  "settings.high": "High"
 }

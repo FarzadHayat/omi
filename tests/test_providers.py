@@ -212,3 +212,79 @@ async def test_daemon_live_provider_and_model_switch(tmp_path):
     finally:
         await daemon.close()
         shutil.rmtree(sock_dir, ignore_errors=True)
+
+
+def test_save_override_preserves_comments_and_roundtrips(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text('# keep my comment\n\n[stt]\nhotwords = ["Omi"]\n', encoding="utf-8")
+    config.save_override("brain", "talker", "opencode", p)
+    config.save_override("wake", "threshold", 0.10, p)
+    config.save_override("wake", "conversational", False, p)
+    config.save_override("brain", "talker", "claude", p)
+    raw = p.read_text(encoding="utf-8")
+    assert "# keep my comment" in raw
+    loaded = config.load(p)
+    assert loaded.stt.hotwords == ["Omi"]
+    assert loaded.brain.talker == "claude"
+    assert loaded.wake.threshold == pytest.approx(0.10)
+    assert loaded.wake.conversational is False
+
+
+@pytest.mark.asyncio
+async def test_daemon_settings_persist_and_broadcast(tmp_path):
+    sock_dir = Path(tempfile.mkdtemp(prefix="om", dir="/tmp"))
+    sock = sock_dir / "omi.sock"
+    cfg_path = tmp_path / "omi.toml"
+    cfg = config.Config()
+    session = Session(
+        stt=FakeSTT(),
+        tts=FakeTTS(),
+        brain=FakeBrain(lambda _: [(0.0, TextDelta("ok")), (0.0, TurnDone())]),
+        registry=ToolRegistry(),
+        router=lambda _: None,
+        out=CaptureOut(),
+        state_dir=tmp_path,
+    )
+    reloaded = []
+
+    class _FakeWake:
+        active = True
+        conversing = False
+        error = None
+
+        async def start(self): self.active = True
+        async def stop(self): self.active = False
+        async def reload_detector(self): reloaded.append(cfg.wake.threshold)
+
+    daemon = Daemon(session, cfg, socket_path=sock, wake=_FakeWake(), config_path=cfg_path)
+    await daemon.start()
+    await daemon.ready.wait()
+    try:
+        sub_r, sub_w = await asyncio.open_unix_connection(str(sock))
+        sub_w.write(b'{"cmd":"subscribe"}\n')
+        await sub_w.drain()
+        assert json.loads(await sub_r.readline())["subscribed"] is True
+
+        r, w = await asyncio.open_unix_connection(str(sock))
+        w.write(b'{"cmd":"set","key":"wake.sensitivity","value":"high","save":true}\n')
+        await w.drain()
+        rep = json.loads(await asyncio.wait_for(r.readline(), 2.0))
+        assert rep == {"ok": True, "key": "wake.sensitivity", "value": "high"}
+        assert reloaded == [0.10]
+
+        ev = json.loads(await asyncio.wait_for(sub_r.readline(), 2.0))
+        assert ev["event"] == "settings" and ev["wake"]["sensitivity"] == "high"
+
+        w.write(b'{"cmd":"set","key":"wake.conversational","value":"off","save":true}\n')
+        await w.drain()
+        rep2 = json.loads(await asyncio.wait_for(r.readline(), 2.0))
+        assert rep2 == {"ok": True, "key": "wake.conversational", "value": "off"}
+
+        saved = config.load(cfg_path)
+        assert saved.wake.threshold == pytest.approx(0.10)
+        assert saved.wake.conversational is False
+        w.close()
+        sub_w.close()
+    finally:
+        await daemon.close()
+        shutil.rmtree(sock_dir, ignore_errors=True)

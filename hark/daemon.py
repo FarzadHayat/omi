@@ -48,6 +48,16 @@ SETTABLE = {
     "tts.voice": "tts",
     "stt.engine": "stt",
 }
+WAKE_SENSITIVITY = {"low": 0.22, "medium": 0.15, "high": 0.10}
+KOKORO_VOICES = ("af_heart", "af_bella", "am_adam", "bf_emma", "bm_george")
+
+
+def sensitivity_label(threshold: float) -> str:
+    if threshold >= 0.19:
+        return "low"
+    if threshold <= 0.12:
+        return "high"
+    return "medium"
 MAX_REQUEST = 1 << 22  # bytes in one request line
 OUTBOX_LIMIT = 2000  # queued lines per client before a client that does not read is dropped
 SHUTDOWN_JOB_S = 5.0  # the after-session memory job gets this long when the daemon stops
@@ -161,11 +171,13 @@ class Daemon:
         web: Any = None,
         wake: Any = None,
         track_cursor: bool = False,
+        config_path: Path | None = None,
     ) -> None:
         self.session = session
         self.web = web  # phone and tablet server (hark.web.server.WebServer), started with the socket
         self.wake = wake  # optional always-on WakeListener (hark.audio.wake.WakeListener)
         self.cfg = cfg
+        self.config_path = config_path  # when set, `set` with save=true persists to this TOML file
         self.audio_in = audio_in
         self.factories = factories or {}
         self.wav_out = wav_out
@@ -488,7 +500,7 @@ class Daemon:
         if cmd == "status":
             return self.status()
         if cmd == "set":
-            return await self._set(req.get("key"), req.get("value"))
+            return await self._set(req.get("key"), req.get("value"), save=bool(req.get("save")))
         # subscribe
         self._subs.add(conn)
         return {"ok": True, "subscribed": True}
@@ -525,6 +537,8 @@ class Daemon:
             errors["speaker"] = out_error
         if self.wake is not None and getattr(self.wake, "error", None):
             errors["wake"] = self.wake.error
+        from hark.brain.cli_providers import available_providers
+
         talker = self.cfg.brain.talker
         talker_model = self._active_model(talker)
         return {
@@ -535,9 +549,18 @@ class Daemon:
             "talker": talker,
             "talker_model": talker_model,
             "worker": self.cfg.brain.worker if s.worker is not None else "off",
+            "providers": [
+                {"name": p["name"], "installed": p["installed"], "model": p["model"]}
+                for p in available_providers(self.cfg)
+            ],
+            "voices": list(KOKORO_VOICES),
             "wake": {
                 "enabled": bool(self.cfg.wake.enabled and self.wake is not None and self.wake.active),
                 "configured": self.cfg.wake.enabled,
+                "conversational": self.cfg.wake.conversational,
+                "conversing": bool(self.wake is not None and getattr(self.wake, "conversing", False)),
+                "threshold": self.cfg.wake.threshold,
+                "sensitivity": sensitivity_label(self.cfg.wake.threshold),
                 "phrases": list(self.cfg.wake.phrases),
             },
             "engines": {
@@ -551,6 +574,27 @@ class Daemon:
             "errors": errors,
         }
 
+    def _persist(self, section: str, key: str, value: Any, save: bool) -> None:
+        if save and self.config_path is not None:
+            try:
+                config.save_override(section, key, value, self.config_path)
+            except Exception as exc:
+                log.warning("could not save %s.%s to %s: %s", section, key, self.config_path, exc)
+
+    def _settings_event(self) -> dict[str, Any]:
+        return {
+            "event": "settings",
+            "talker": self.cfg.brain.talker,
+            "talker_model": self._active_model(self.cfg.brain.talker),
+            "voice": self.cfg.tts.kokoro_voice if self.cfg.tts.engine == "kokoro" else "",
+            "wake": {
+                "enabled": bool(self.cfg.wake.enabled and self.wake is not None and self.wake.active),
+                "conversational": self.cfg.wake.conversational,
+                "threshold": self.cfg.wake.threshold,
+                "sensitivity": sensitivity_label(self.cfg.wake.threshold),
+            },
+        }
+
     def _active_model(self, talker: str) -> str:
         if talker == "claude":
             return self.cfg.brain.claude.model
@@ -559,17 +603,20 @@ class Daemon:
         pcfg = getattr(self.cfg.brain, talker, None)
         return getattr(pcfg, "model", "") if pcfg is not None else ""
 
-    async def _set(self, key: Any, value: Any) -> dict[str, Any]:
+    @staticmethod
+    def _parse_bool(value: Any, key: str) -> bool:
+        raw = str(value).strip().lower() if isinstance(value, (str, bool)) else ""
+        if raw in ("true", "on", "1", "yes"):
+            return True
+        if raw in ("false", "off", "0", "no"):
+            return False
+        raise RequestError(f"{key} expects on or off")
+
+    async def _set(self, key: Any, value: Any, *, save: bool = False) -> dict[str, Any]:
         if key == "wake.enabled":
             if self.wake is None:
                 raise RequestError("wake.enabled cannot be changed live (no wake listener)")
-            raw = str(value).strip().lower() if isinstance(value, (str, bool)) else ""
-            if raw in ("true", "on", "1", "yes"):
-                want = True
-            elif raw in ("false", "off", "0", "no"):
-                want = False
-            else:
-                raise RequestError("wake.enabled expects on or off")
+            want = self._parse_bool(value, key)
             if want:
                 try:
                     await self.wake.start()
@@ -581,10 +628,41 @@ class Daemon:
                 await self.wake.stop()
                 self.errors.pop("wake", None)
             self.cfg.wake.enabled = want
+            self._persist("wake", "enabled", want, save)
             await self.broadcast({"event": "wake", "enabled": want})
+            await self.broadcast(self._settings_event())
             return {"ok": True, "key": key, "value": "on" if want else "off"}
+        if key == "wake.conversational":
+            want = self._parse_bool(value, key)
+            self.cfg.wake.conversational = want
+            self._persist("wake", "conversational", want, save)
+            await self.broadcast(self._settings_event())
+            return {"ok": True, "key": key, "value": "on" if want else "off"}
+        if key == "wake.sensitivity":
+            raw = str(value).strip().lower() if isinstance(value, (str, int, float)) else ""
+            if raw in WAKE_SENSITIVITY:
+                thresh = WAKE_SENSITIVITY[raw]
+                label = raw
+            else:
+                try:
+                    thresh = float(raw)
+                except ValueError as exc:
+                    raise RequestError("wake.sensitivity expects low, medium, high, or a number 0.05-0.6") from exc
+                if not 0.05 <= thresh <= 0.6:
+                    raise RequestError("wake.sensitivity must be between 0.05 and 0.6")
+                label = sensitivity_label(thresh)
+            self.cfg.wake.threshold = thresh
+            if self.wake is not None and hasattr(self.wake, "reload_detector"):
+                try:
+                    await self.wake.reload_detector()
+                except Exception as exc:
+                    raise RequestError(f"could not update wake sensitivity: {exc}") from exc
+            self._persist("wake", "threshold", thresh, save)
+            await self.broadcast(self._settings_event())
+            return {"ok": True, "key": key, "value": label}
         if key not in SETTABLE:
-            raise RequestError(f"cannot set {key}; settable: {', '.join((*SETTABLE, 'wake.enabled'))}")
+            all_keys = (*SETTABLE, "wake.enabled", "wake.conversational", "wake.sensitivity")
+            raise RequestError(f"cannot set {key}; settable: {', '.join(all_keys)}")
         if not isinstance(value, str) or not value:
             raise RequestError("set needs a string value")
         factory = self.factories.get(key)
@@ -603,19 +681,27 @@ class Daemon:
             asyncio.ensure_future(_quietly(old.close()))
         if key == "tts.voice":
             self.cfg.tts.kokoro_voice = value
+            self._persist("tts", "kokoro_voice", value, save)
         elif key == "brain.talker":
-            self.cfg.brain.talker = getattr(new, "name", value) if value in ("auto", "openai") else value
+            resolved = getattr(new, "name", value) if value in ("auto", "openai") else value
+            self.cfg.brain.talker = resolved
+            self._persist("brain", "talker", resolved, save)
         elif key == "brain.model":
             talker = self.cfg.brain.talker
             if talker == "claude":
                 self.cfg.brain.claude.model = value
+                self._persist("brain.claude", "model", value, save)
             elif talker in ("local", "openai"):
                 self.cfg.brain.local.model_name = value
+                self._persist("brain.local", "model_name", value, save)
             elif (pcfg := getattr(self.cfg.brain, talker, None)) is not None and hasattr(pcfg, "model"):
                 pcfg.model = value
+                self._persist(f"brain.{talker}", "model", value, save)
         else:
             section, name = key.split(".")
             setattr(getattr(self.cfg, section), name, value)
+            self._persist(section, name, value, save)
+        await self.broadcast(self._settings_event())
         return {"ok": True, "key": key, "value": self.cfg.brain.talker if key == "brain.talker" else value}
 
     async def _turn(self, conn: Conn, req: dict[str, Any], utterance: bool = False, **kw: Any) -> dict[str, Any]:
