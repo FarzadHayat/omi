@@ -41,7 +41,7 @@ log = logging.getLogger(__name__)
 Factory = Callable[[str], Awaitable[Any]]
 Job = Callable[[], Awaitable[Any]]
 # Settable keys and the Session attribute each one swaps.
-SETTABLE = {"brain.talker": "brain", "tts.engine": "tts", "stt.engine": "stt"}
+SETTABLE = {"brain.talker": "brain", "tts.engine": "tts", "tts.voice": "tts", "stt.engine": "stt"}
 MAX_REQUEST = 1 << 22  # bytes in one request line
 OUTBOX_LIMIT = 2000  # queued lines per client before a client that does not read is dropped
 SHUTDOWN_JOB_S = 5.0  # the after-session memory job gets this long when the daemon stops
@@ -425,6 +425,20 @@ class Daemon:
                 raise RequestError("tool needs a name and an args object")
             res = await s.registry.call(name, args)
             return {"ok": True, "result": {"ok": res.ok, "text": res.text}}
+        if cmd == "mascot":
+            action = str(req.get("action") or "point")
+            if action not in ("point", "move", "clear"):
+                raise RequestError("mascot action must be point, move or clear")
+            ev: dict[str, Any] = {"event": "mascot", "action": action}
+            if action != "clear":
+                ev["x"] = int(req.get("x", 0))
+                ev["y"] = int(req.get("y", 0))
+                ev["w"] = max(0, int(req.get("w", 0)))
+                ev["h"] = max(0, int(req.get("h", 0)))
+                ev["label"] = str(req.get("label") or "")[:140]
+                ev["duration"] = max(1, min(int(req.get("duration", 8)), 30))
+            await self.broadcast(ev)
+            return {"ok": True}
         if cmd == "status":
             return self.status()
         if cmd == "set":
@@ -465,11 +479,16 @@ class Daemon:
             errors["speaker"] = out_error
         return {
             "ok": True,
+            "name": self.cfg.name,
             "state": s.state.value,
             "ready": self.ready.is_set(),
             "talker": self.cfg.brain.talker,
             "worker": self.cfg.brain.worker if s.worker is not None else "off",
-            "engines": {"stt": self.cfg.stt.engine, "tts": self.cfg.tts.engine},
+            "engines": {
+                "stt": self.cfg.stt.engine,
+                "tts": self.cfg.tts.engine,
+                "voice": self.cfg.tts.kokoro_voice if self.cfg.tts.engine == "kokoro" else "",
+            },
             "session_id": s.session_id,
             "timing": s.last_timing,
             "confirm": s.pending_confirm,
@@ -495,8 +514,11 @@ class Daemon:
         setattr(self.session, attr, new)
         if attr == "brain":
             asyncio.ensure_future(_quietly(old.close()))
-        section, name = key.split(".")
-        setattr(getattr(self.cfg, section), name, value)
+        if key == "tts.voice":
+            self.cfg.tts.kokoro_voice = value
+        else:
+            section, name = key.split(".")
+            setattr(getattr(self.cfg, section), name, value)
         return {"ok": True, "key": key, "value": value}
 
     async def _turn(self, conn: Conn, req: dict[str, Any], utterance: bool = False, **kw: Any) -> dict[str, Any]:

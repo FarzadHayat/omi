@@ -34,6 +34,7 @@ async def test_missing_models_do_not_stop_the_daemon(tmp_path, sock_dir, monkeyp
     cfg.stt.engine = "moonshine"
     cfg.stt.moonshine_dir = str(tmp_path / "no-stt")
     cfg.tts.piper_model = str(tmp_path / "no-tts.onnx")
+    cfg.tts.kokoro_model = str(tmp_path / "no-tts.onnx")
     cfg.brain.talker = "local"
     cfg.brain.worker = "off"
     cfg.brain.local.base_url = "http://127.0.0.1:9"  # nothing listens: no llama-server is started
@@ -63,6 +64,7 @@ async def test_talker_is_warmed_on_the_new_memory_after_a_session_ends(tmp_path,
     cfg.stt.engine = "moonshine"
     cfg.stt.moonshine_dir = str(tmp_path / "no-stt")
     cfg.tts.piper_model = str(tmp_path / "no-tts.onnx")
+    cfg.tts.kokoro_model = str(tmp_path / "no-tts.onnx")
     cfg.brain.talker = "local"
     cfg.brain.worker = "off"
     cfg.brain.local.base_url = "http://127.0.0.1:9"

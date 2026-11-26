@@ -42,10 +42,11 @@ class ClaudeSession:
     def __init__(self, model: str, system_prompt: str, *, tools: str = "",
                  setting_sources: str = "", use_mcp: bool | None = None,
                  cwd: str | None = None, claude_cmd: list[str] | None = None,
-                 effort: str = "") -> None:
+                 effort: str = "", chrome: bool = False) -> None:
         self.model = model
         self.system_prompt = system_prompt
         self.effort = effort  # "" leaves the CLI's default effort
+        self.chrome = chrome  # enable Claude in Chrome browser control
         self.tools = tools  # "" means no built-in tools, only hark MCP tools
         self.setting_sources = setting_sources  # "" skips user hooks, settings and CLAUDE.md
         self.use_mcp = hark_mcp_available() if use_mcp is None else use_mcp
@@ -80,6 +81,8 @@ class ClaudeSession:
             "--disable-slash-commands",
             "--strict-mcp-config",
         ]
+        if self.chrome:
+            cmd.append("--chrome")
         if self.effort:
             cmd += ["--effort", self.effort]
         if self.use_mcp:

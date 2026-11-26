@@ -1,6 +1,6 @@
 .pragma library
 
-// Pure helpers for the hark bar widget: no QML, so the harness can check them.
+// Pure helpers for the Omi bar widget and on-screen companion: no QML, so the harness can check them.
 
 var STATES = ["offline", "idle", "listening", "thinking", "speaking", "acting", "confirming"]
 var MAX_LINES = 40      // transcript entries kept in the panel
@@ -32,6 +32,28 @@ function knownState(value) {
 function confirmOf(msg) {
   if (!msg || typeof msg.id !== "string" || msg.id === "" || msg.id.length > 64) return null
   return { id: msg.id, question: clip(msg.question, 600), detail: clip(msg.detail || "", 4000) }
+}
+
+// A mascot event (point, move, clear), checked and bounded.
+function mascotOf(msg) {
+  if (!msg || typeof msg.action !== "string") return null
+  if (msg.action === "clear") return null
+  if (msg.action !== "point" && msg.action !== "move") return null
+  var x = Number(msg.x)
+  var y = Number(msg.y)
+  if (!isFinite(x) || !isFinite(y)) return null
+  var w = Math.max(0, Math.min(Number(msg.w) || 0, 8000))
+  var h = Math.max(0, Math.min(Number(msg.h) || 0, 8000))
+  var dur = Math.max(1, Math.min(Number(msg.duration) || 8, 30))
+  return {
+    action: msg.action,
+    x: Math.round(x),
+    y: Math.round(y),
+    w: Math.round(w),
+    h: Math.round(h),
+    label: clip(msg.label || "", 140),
+    duration: dur
+  }
 }
 
 // Returns a new list so QML sees the change.

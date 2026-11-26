@@ -117,11 +117,13 @@ class _Speaker:
         out: AudioOut,
         quiet: bool,
         on_first: Callable[[], Awaitable[None]] | None = None,
+        on_clause: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         self.tts = tts
         self.out = out
         self.quiet = quiet
         self.on_first = on_first
+        self.on_clause = on_clause
         self.queued: list[str] = []  # the reply, for the transcript
         self.spoken: list[str] = []  # the part of the reply that was heard
         self._q: asyncio.Queue[tuple[str, bool] | None] = asyncio.Queue()
@@ -169,6 +171,8 @@ class _Speaker:
             if self.quiet:
                 if record:
                     self.spoken.append(text)
+                    if self.on_clause:
+                        await self.on_clause(text)
                 await self._first()
                 continue
             heard = False
@@ -181,6 +185,8 @@ class _Speaker:
                     heard = True
                     if record:
                         self.spoken.append(text)
+                        if self.on_clause:
+                            await self.on_clause(text)
                     await self._first()
 
     async def _synth(self, text: str) -> AsyncIterator[np.ndarray]:
@@ -509,6 +515,9 @@ class Session:
             if self.state not in (State.CONFIRMING, State.ACTING):
                 await self._set_state(State.SPEAKING, turn)
 
+        async def on_clause(clause: str) -> None:
+            await self._emit({"event": "speech", "text": clause})
+
         user_text = (text or "").strip()
         error: str | None = None
         speaker: _Speaker | None = None
@@ -519,7 +528,7 @@ class Session:
                 timing["stt_ms"] = ms()
             if user_text:
                 await self._emit_turn(turn, transcript("user", user_text))
-                speaker = _Speaker(self.tts, out, quiet, on_first)
+                speaker = _Speaker(self.tts, out, quiet, on_first, on_clause)
                 turn.speaker = speaker
                 if note:
                     speaker.say(note, record=False)

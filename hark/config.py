@@ -1,4 +1,4 @@
-"""Configuration: defaults here, overrides in ~/.config/hark/config.toml.
+"""Configuration: defaults here, overrides in ~/.config/omi/config.toml.
 
 The TOML file mirrors the dataclass tree, for example:
 
@@ -7,6 +7,7 @@ The TOML file mirrors the dataclass tree, for example:
 
     [tts]
     engine = "kokoro"
+    kokoro_voice = "af_heart"
 """
 
 from __future__ import annotations
@@ -17,12 +18,38 @@ from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
 
 HOME = Path.home()
-CONFIG_PATH = Path(os.environ.get("HARK_CONFIG", HOME / ".config/hark/config.toml"))
-DATA_DIR = Path(os.environ.get("HARK_DATA_DIR", HOME / ".local/share/hark"))
-STATE_DIR = Path(os.environ.get("HARK_STATE_DIR", HOME / ".local/state/hark"))
-RUNTIME_DIR = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "hark"
-SOCKET_PATH = Path(os.environ.get("HARK_SOCKET", RUNTIME_DIR / "hark.sock"))
-MODELS_DIR = DATA_DIR / "models"
+
+
+def _env_path(primary: str, legacy: str, default: Path) -> Path:
+    val = os.environ.get(primary) or os.environ.get(legacy)
+    return Path(val) if val else default
+
+
+def _first_existing(*candidates: Path) -> Path:
+    for path in candidates:
+        if path.exists():
+            return path
+    return candidates[0]
+
+
+CONFIG_PATH = _env_path(
+    "OMI_CONFIG",
+    "HARK_CONFIG",
+    _first_existing(HOME / ".config/omi/config.toml", HOME / ".config/hark/config.toml"),
+)
+DATA_DIR = _env_path(
+    "OMI_DATA_DIR",
+    "HARK_DATA_DIR",
+    _first_existing(HOME / ".local/share/omi", HOME / ".local/share/hark"),
+)
+STATE_DIR = _env_path("OMI_STATE_DIR", "HARK_STATE_DIR", HOME / ".local/state/omi")
+RUNTIME_DIR = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "omi"
+SOCKET_PATH = _env_path("OMI_SOCKET", "HARK_SOCKET", RUNTIME_DIR / "omi.sock")
+MODELS_DIR = _first_existing(DATA_DIR / "models", HOME / ".local/share/hark/models")
+
+
+def _model_path(rel: str, *fallbacks: Path) -> str:
+    return str(_first_existing(MODELS_DIR / rel, HOME / ".local/share/hark/models" / rel, *fallbacks))
 
 
 @dataclass
@@ -37,24 +64,33 @@ class SttConfig:
     # moonshine | nemotron. Nemotron streams while you speak: on 96 spoken commands it
     # heard 60 of 63 routable ones right (Moonshine 48), at about 215 ms after speech (45).
     engine: str = "nemotron"
-    moonshine_dir: str = str(MODELS_DIR / "moonshine-base-en")
-    nemotron_dir: str = str(MODELS_DIR / "nemotron-streaming-160ms")
+    moonshine_dir: str = _model_path("moonshine-base-en")
+    nemotron_dir: str = _model_path("nemotron-streaming-160ms")
     threads: int = 4
 
 
 @dataclass
 class TtsConfig:
-    engine: str = "piper"  # piper | kokoro
-    piper_model: str = str(MODELS_DIR / "piper/en_US-lessac-medium.onnx")
-    kokoro_model: str = str(MODELS_DIR / "kokoro/kokoro-v1.0.int8.onnx")
-    kokoro_voices: str = str(MODELS_DIR / "kokoro/voices-v1.0.bin")
-    kokoro_voice: str = "bm_george"
+    engine: str = "kokoro"  # kokoro | piper
+    piper_model: str = _model_path("piper/en_US-lessac-medium.onnx")
+    # Full-precision Kokoro fp32 sounds markedly cleaner than int8 (~498 ms first chunk vs 356 ms).
+    kokoro_model: str = _model_path(
+        "kokoro/kokoro-v1.0.onnx",
+        HOME / ".local/share/kokoro-tts/kokoro-v1.0.onnx",
+        MODELS_DIR / "kokoro/kokoro-v1.0.int8.onnx",
+        HOME / ".local/share/hark/models/kokoro/kokoro-v1.0.int8.onnx",
+    )
+    kokoro_voices: str = _model_path(
+        "kokoro/voices-v1.0.bin",
+        HOME / ".local/share/kokoro-tts/voices-v1.0.bin",
+    )
+    kokoro_voice: str = "af_heart"
     speed: float = 1.0
 
 
 @dataclass
 class LocalLlmConfig:
-    # Any OpenAI-compatible chat-completions endpoint. When base_url is empty hark
+    # Any OpenAI-compatible chat-completions endpoint. When base_url is empty Omi
     # starts its own llama-server with `model` on `port`.
     base_url: str = ""
     api_key_env: str = ""  # name of the env var holding the key; never the key itself
@@ -67,8 +103,9 @@ class LocalLlmConfig:
 
 @dataclass
 class ClaudeConfig:
-    model: str = "haiku"  # talker and worker model for the claude CLI
-    worker_model: str = "sonnet"
+    model: str = "haiku"  # talker model for the claude CLI
+    worker_model: str = "sonnet"  # background worker model
+    chrome: bool = True  # enable Claude in Chrome browser control on the worker
 
 
 @dataclass
@@ -109,7 +146,7 @@ class WebConfig:
 
 @dataclass
 class Config:
-    name: str = "Hark"  # what the assistant calls itself
+    name: str = "Omi"  # what the assistant calls itself
     audio: AudioConfig = field(default_factory=AudioConfig)
     stt: SttConfig = field(default_factory=SttConfig)
     tts: TtsConfig = field(default_factory=TtsConfig)

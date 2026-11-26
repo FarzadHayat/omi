@@ -20,10 +20,10 @@ class Route:
 
 
 _LEAD = re.compile(
-    r"^(?:(?:hey|hi|ok|okay|yo)\s+)?(?:hark\s+)?"
+    r"^(?:(?:hey|hi|ok|okay|yo)\s+)?(?:(?:omi|ommy|oh me|oh my|hark)\s+)?"
     r"(?:(?:please|can you|could you|would you|will you|can u|just|now|so|um|uh|erm|hmm)\s+)*"
 )
-_TRAIL = re.compile(r"(?:\s+(?:please|for me|thanks|thank you|right now|now|hark))+$")
+_TRAIL = re.compile(r"(?:\s+(?:please|for me|thanks|thank you|right now|now|omi|hark))+$")
 _FILLER = re.compile(r"\b(?:um+|uh+|uhm|erm|er|hmm+|ah)\b")
 
 _UNITS = {w: i for i, w in enumerate(

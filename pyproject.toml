@@ -14,6 +14,7 @@ dependencies = [
 ]
 
 [project.scripts]
+omi = "hark.cli:main"
 hark = "hark.cli:main"
 
 [dependency-groups]

@@ -29,12 +29,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 ASSETS = Path(__file__).resolve().parent.parent / "omarchy"
-PLUGIN_ID = "hark"
-UNIT = "hark.service"
-BEGIN = "-- >>> hark keys, written by `hark install`; `hark uninstall` removes this block"
-END = "-- <<< hark keys"
-UNIT_MARK = "# Written by `hark install`"
-# The hark path goes into a Lua string, a shell command and an ExecStart line.
+PLUGIN_ID = "omi"
+UNIT = "omi.service"
+BEGIN = "-- >>> omi keys, written by `omi install`; `omi uninstall` removes this block"
+END = "-- <<< omi keys"
+UNIT_MARK = "# Written by `omi install`"
+LEGACY_PLUGIN_ID = "hark"
+LEGACY_UNIT = "hark.service"
+LEGACY_BEGIN = "-- >>> hark keys, written by `hark install`; `hark uninstall` removes this block"
+LEGACY_END = "-- <<< hark keys"
+LEGACY_UNIT_MARK = "# Written by `hark install`"
+# The omi path goes into a Lua string, a shell command and an ExecStart line.
 SAFE_PATH = re.compile(r"/[A-Za-z0-9_./+-]+")
 
 Runner = Callable[[list[str]], subprocess.CompletedProcess]
@@ -75,7 +80,15 @@ class Paths:
 
     @property
     def backups(self) -> Path:
-        return self.home / ".local/state/hark/backups"
+        return self.home / ".local/state/omi/backups"
+
+    @property
+    def legacy_plugin(self) -> Path:
+        return self.home / ".config/omarchy/plugins" / LEGACY_PLUGIN_ID
+
+    @property
+    def legacy_unit(self) -> Path:
+        return self.home / ".config/systemd/user" / LEGACY_UNIT
 
 
 @dataclass
@@ -113,31 +126,36 @@ class Backup:
         return dest
 
 
-def hark_binary() -> Path:
-    """The hark entry point of the environment running this: the keys and the unit
+def omi_binary() -> Path:
+    """The omi entry point of the environment running this: the keys and the unit
     call it directly, which starts faster than `uv run`."""
-    exe = Path(sys.prefix) / "bin" / "hark"
-    if exe.exists():
-        return exe
-    found = shutil.which("hark")
-    if found:
-        return Path(found)
-    raise InstallError("cannot find the hark command; run this as: uv run hark install")
+    for name in ("omi", "hark"):
+        exe = Path(sys.prefix) / "bin" / name
+        if exe.exists():
+            return exe
+    for name in ("omi", "hark"):
+        found = shutil.which(name)
+        if found:
+            return Path(found)
+    raise InstallError("cannot find the omi command; run this as: uv run omi install")
 
 
-def render(template: str, hark: Path) -> str:
-    if not SAFE_PATH.fullmatch(str(hark)):
-        raise InstallError(f"hark lives at {hark}, a path with characters the keys and the unit cannot hold; "
+hark_binary = omi_binary
+
+
+def render(template: str, binary: Path) -> str:
+    if not SAFE_PATH.fullmatch(str(binary)):
+        raise InstallError(f"omi lives at {binary}, a path with characters the keys and the unit cannot hold; "
                            "move the checkout to a plain path")
-    return template.replace("@HARK@", str(hark))
+    return template.replace("@OMI@", str(binary)).replace("@HARK@", str(binary))
 
 
-def bindings_block(hark: Path) -> str:
-    return f"{BEGIN}\n{render((ASSETS / 'hypr/bindings.lua').read_text(), hark)}{END}\n"
+def bindings_block(binary: Path) -> str:
+    return f"{BEGIN}\n{render((ASSETS / 'hypr/bindings.lua').read_text(), binary)}{END}\n"
 
 
-def unit_text(hark: Path) -> str:
-    return render((ASSETS / "systemd" / UNIT).read_text(), hark)
+def unit_text(binary: Path) -> str:
+    return render((ASSETS / "systemd" / UNIT).read_text(), binary)
 
 
 # --- files ---------------------------------------------------------------------
@@ -158,15 +176,15 @@ def _write(path: Path, text: str) -> None:
         raise
 
 
-def _find_block(text: str, path: Path) -> tuple[int, int] | None:
+def _find_block(text: str, path: Path, begin: str = BEGIN, end: str = END) -> tuple[int, int] | None:
     """Character span of the marked block, end marker line included."""
-    start = _line_at(text, BEGIN)
+    start = _line_at(text, begin)
     if start is None:
         return None
-    end = _line_at(text, END, start)
-    if end is None:
-        raise InstallError(f"{path} has the hark start marker but no end marker ({END}); fix it by hand")
-    stop = text.find("\n", end)
+    stop_line = _line_at(text, end, start)
+    if stop_line is None:
+        raise InstallError(f"{path} has the start marker but no end marker ({end}); fix it by hand")
+    stop = text.find("\n", stop_line)
     return start, len(text) if stop < 0 else stop + 1
 
 
@@ -197,12 +215,12 @@ def install_bindings(paths: Paths, block: str, backup: Backup) -> bool:
     return True
 
 
-def remove_bindings(paths: Paths, backup: Backup) -> bool:
+def remove_bindings(paths: Paths, backup: Backup, begin: str = BEGIN, end: str = END) -> bool:
     path = paths.bindings
     if not path.exists():
         return False
     text = path.read_text()
-    span = _find_block(text, path)
+    span = _find_block(text, path, begin, end)
     if span is None:
         return False
     before = text[:span[0]]
@@ -257,7 +275,7 @@ def is_our_unit(path: Path) -> bool:
         return False
 
 
-def plugin_enabled(paths: Paths) -> bool:
+def plugin_enabled(paths: Paths, plugin_id: str = PLUGIN_ID) -> bool:
     """The widget has a place in shell.json (any bar section, or plugins[])."""
     try:
         data = json.loads(paths.shell_json.read_text())
@@ -266,7 +284,7 @@ def plugin_enabled(paths: Paths) -> bool:
 
     def walk(node: object) -> bool:
         if isinstance(node, dict):
-            return node.get("id") == PLUGIN_ID or any(walk(v) for v in node.values())
+            return node.get("id") == plugin_id or any(walk(v) for v in node.values())
         if isinstance(node, list):
             return any(walk(v) for v in node)
         return False
@@ -274,18 +292,52 @@ def plugin_enabled(paths: Paths) -> bool:
     return walk(data.get("bar", {}).get("layout", {})) or walk(data.get("plugins", []))
 
 
+def _cleanup_legacy_hark(paths: Paths, backup: Backup, report: Report, *, activate: bool, run: Runner) -> bool:
+    """Cleanly migrate away from an earlier `hark install` so no duplicate service/plugin/keys remain."""
+    keys_removed = False
+    if paths.legacy_unit.exists():
+        try:
+            ours = paths.legacy_unit.read_text().startswith(LEGACY_UNIT_MARK)
+        except OSError:
+            ours = False
+        if ours:
+            if activate:
+                _step(report, run, ["systemctl", "--user", "disable", "--now", LEGACY_UNIT])
+            backup.save(paths.legacy_unit)
+            paths.legacy_unit.unlink()
+            report.changed.append(f"migrated: removed old {paths.legacy_unit}")
+    if activate and plugin_enabled(paths, LEGACY_PLUGIN_ID):
+        backup.save(paths.shell_json)
+        if _step(report, run, ["omarchy", "plugin", "disable", LEGACY_PLUGIN_ID]):
+            report.changed.append("migrated: old hark widget turned off")
+    if paths.legacy_plugin.exists() and not paths.legacy_plugin.is_symlink():
+        try:
+            ours = json.loads((paths.legacy_plugin / "manifest.json").read_text()).get("id") == LEGACY_PLUGIN_ID
+        except (OSError, ValueError, AttributeError):
+            ours = False
+        if ours:
+            backup.save(paths.legacy_plugin)
+            shutil.rmtree(paths.legacy_plugin)
+            report.changed.append(f"migrated: removed old {paths.legacy_plugin}")
+    if remove_bindings(paths, backup, LEGACY_BEGIN, LEGACY_END):
+        report.changed.append(f"migrated: old hark keys removed from {paths.bindings}")
+        keys_removed = True
+    return keys_removed
+
+
 # --- install and uninstall -------------------------------------------------------
 
 
-def install(home: Path, hark: Path, *, activate: bool = True, run: Runner = run_command) -> Report:
+def install(home: Path, binary: Path, *, activate: bool = True, run: Runner = run_command) -> Report:
     paths, report, backup = Paths(home), Report(), Backup(Paths(home))
-    block, unit = bindings_block(hark), unit_text(hark)  # both checked before anything is written
+    block, unit = bindings_block(binary), unit_text(binary)  # both checked before anything is written
+    legacy_keys = _cleanup_legacy_hark(paths, backup, report, activate=activate, run=run)
     if install_plugin(paths, backup):
         report.changed.append(f"bar widget copied to {paths.plugin}")
     unit_changed = install_unit(paths, unit, backup)
     if unit_changed:
         report.changed.append(f"service written to {paths.unit}")
-    keys_changed = install_bindings(paths, block, backup)
+    keys_changed = install_bindings(paths, block, backup) or legacy_keys
     if keys_changed:
         report.changed.append(f"keys added to {paths.bindings}")
     if activate:

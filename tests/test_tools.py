@@ -30,7 +30,8 @@ def test_registry_has_every_tool():
         "launch_or_focus", "list_windows", "active_window", "focus_window", "close_window", "switch_workspace",
         "move_window_to_workspace", "toggle_fullscreen", "type_text", "press_keys", "media", "volume",
         "clipboard_get", "clipboard_set", "screenshot", "notify", "open_url", "current_time", "lock_screen",
-        "power", "omarchy",
+        "power", "omarchy", "screen_info", "capture_screen", "ui_inspect", "ui_action",
+        "mouse_move", "mouse_click", "mouse_scroll", "point_at", "highlight_window",
     }
 
 
@@ -38,7 +39,8 @@ def test_safety_classes():
     tools = build_registry(Config()).tools
     assert {n for n, t in tools.items() if t.safety == "destructive"} == {"close_window", "power", "press_keys"}
     assert {n for n, t in tools.items() if t.safety == "read"} == {
-        "list_windows", "active_window", "clipboard_get", "current_time"}
+        "list_windows", "active_window", "clipboard_get", "current_time",
+        "screen_info", "capture_screen", "ui_inspect", "point_at", "highlight_window"}
     for t in tools.values():
         assert t.description and "\n" not in t.description and t.parameters["type"] == "object"
 
@@ -214,8 +216,8 @@ def test_system_builders():
         system.build_press_keys("hyper+x")
     assert system.build_clipboard_set("secret-ish") == (["wl-copy"], b"secret-ish")
     argv, path = system.build_screenshot(dt.datetime(2026, 1, 2, 3, 4, 5))
-    assert argv == ["grim", str(path)] and path.name == "hark-screenshot-20260102-030405.png"
-    assert system.build_notify("Hi", "there") == ["notify-send", "--app-name=Hark", "--", "Hi", "there"]
+    assert argv == ["grim", str(path)] and path.name == "omi-screenshot-20260102-030405.png"
+    assert system.build_notify("Hi", "there") == ["notify-send", "--app-name=Omi", "--", "Hi", "there"]
     assert system.build_open_url("example.com/a") == ["omarchy-launch-browser", "https://example.com/a"]
     for bad in ("javascript:alert(1)", "file:///etc/passwd", "ftp://x"):
         with pytest.raises(ValueError):

@@ -168,7 +168,7 @@ def screenshot_dir() -> Path:
 
 def build_screenshot(now: dt.datetime | None = None) -> tuple[list[str], Path]:
     now = now or dt.datetime.now()
-    path = screenshot_dir() / f"hark-screenshot-{now:%Y%m%d-%H%M%S}.png"
+    path = screenshot_dir() / f"omi-screenshot-{now:%Y%m%d-%H%M%S}.png"
     return ["grim", str(path)], path
 
 
@@ -182,7 +182,7 @@ async def screenshot() -> ToolResult:
 
 
 def build_notify(title: str, body: str = "") -> list[str]:
-    return ["notify-send", "--app-name=Hark", "--", title, body]
+    return ["notify-send", "--app-name=Omi", "--", title, body]
 
 
 async def notify(title: str, body: str = "") -> ToolResult:

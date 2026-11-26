@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "id": "hark",
-  "name": "Hark",
-  "version": "0.1.0",
-  "author": "hark",
+  "id": "omi",
+  "name": "Omi",
+  "version": "0.2.0",
+  "author": "omi",
   "license": "MIT",
-  "description": "Hark voice assistant status in the bar, with the conversation, typed requests, yes and no answers, and stop.",
+  "description": "Omi voice assistant mascot in the bar and floating on-screen companion with speech bubble, pointer, yes/no confirmations, and conversation panel.",
   "kinds": [
     "bar-widget"
   ],
@@ -13,8 +13,8 @@
     "barWidget": "Panel.qml"
   },
   "barWidget": {
-    "displayName": "Hark",
-    "description": "A small mark that shows whether Hark is listening, thinking, speaking, working or waiting for a yes or no. Click it for the conversation.",
+    "displayName": "Omi",
+    "description": "Animated Omi mascot showing whether Omi is listening, thinking, speaking, acting or asking for confirmation. Click for the conversation panel.",
     "category": "AI",
     "allowMultiple": false,
     "defaultSection": "right"

@@ -857,7 +857,8 @@ _GUARDED_DIRS = (  # relative to home, with what a write there means
     (".config/autostart", "an autostart entry"), (".config/hypr", "the Hyprland config"),
     (".config/uwsm", "the session environment"), (".config/environment.d", "the session environment"),
     (".local/bin", "a program in your command path"), (".claude", "Claude's own settings"),
-    (".config/hark", "hark's settings"), (".config/omarchy/hooks", "an Omarchy hook"),
+    (".config/hark", "hark's settings"), (".config/omi", "Omi's settings"),
+    (".config/omarchy/hooks", "an Omarchy hook"),
     (".config/fish", "your shell startup files"), (".config/nushell", "your shell startup files"),
     (".config/git", "your git settings"), (".local/share/applications", "an app launcher entry"),
 )
@@ -895,6 +896,15 @@ def _hark_tools() -> dict[str, Any]:
     from hark.tools.mcp_server import daemon_tools
 
     return {tool.name: tool for tool in [*build_registry(Config()).tools.values(), *daemon_tools()]}
+
+
+_CHROME_READ = {
+    "tabs_context_mcp", "read_page", "find", "get_page_text",
+    "read_console_messages", "read_network_requests", "shortcuts_list",
+}
+_CHROME_REVERSIBLE = {
+    "tabs_create_mcp", "navigate", "form_input", "computer", "resize_window", "switch_browser",
+}
 
 
 def classify_claude_tool(tool_name: str, tool_input: dict[str, Any]) -> tuple[Decision, str]:
@@ -936,6 +946,22 @@ def classify_claude_tool(tool_name: str, tool_input: dict[str, Any]) -> tuple[De
         return "allow", "reading a web page"
     if tool_name in _ALWAYS_ALLOW:
         return "allow", "safe built-in tool"
+    if tool_name.startswith("mcp__claude-in-chrome__"):
+        name = tool_name.removeprefix("mcp__claude-in-chrome__")
+        if name in _CHROME_READ:
+            return "allow", "read-only browser tool"
+        if name == "navigate":
+            url = str(tool_input.get("url", "")).strip()
+            if url and url.lower() not in ("back", "forward"):
+                if "://" not in url and re.match(r"^[a-z][a-z0-9+.-]*:(?!\d)", url, re.I):
+                    return "deny", "Blocked because only http and https browser navigation is allowed."
+                parsed = urlparse(url if "://" in url else "https://" + url)
+                if parsed.scheme not in ("http", "https"):
+                    return "deny", "Blocked because only http and https browser navigation is allowed."
+            return "allow", "browser navigation"
+        if name in _CHROME_REVERSIBLE:
+            return "allow", "browser interaction"
+        return "confirm", f"This browser action ({name}) can run scripts or upload data."
     if tool_name.startswith("mcp__hark__"):
         name = tool_name.removeprefix("mcp__hark__")
         if name == "approve":

@@ -66,13 +66,13 @@ def _timing_line(t: dict[str, Any]) -> str:
 def _print_human(msg: dict[str, Any]) -> None:
     ev = msg.get("event")
     if ev == "transcript":
-        who = "you" if msg["role"] == "user" else "hark"
+        who = "you" if msg["role"] == "user" else "omi"
         print(f"{who}: {msg['text']}")
     elif ev == "tool" and msg.get("phase") == "end":
         mark = "ok" if msg.get("ok") else "failed"
         print(f"[{msg['name']} {mark}] {msg.get('text', '')}")
     elif ev == "confirm_request":
-        print(f"confirm? {msg['question']}  (answer with: hark yes / hark no)")
+        print(f"confirm? {msg['question']}  (answer with: omi yes / omi no)")
         if msg.get("detail"):
             print(f"  full command: {msg['detail']}")
     elif ev == "progress":
@@ -86,9 +86,10 @@ def _print_human(msg: dict[str, Any]) -> None:
 
 def _print_status(msg: dict[str, Any]) -> None:
     engines = msg.get("engines") or {}
+    voice = f" ({engines['voice']})" if engines.get("voice") else ""
     print(f"state: {msg.get('state')}{'' if msg.get('ready', True) else ' (warming up)'}")
     print(f"talker: {msg.get('talker')}  worker: {msg.get('worker')}")
-    print(f"stt: {engines.get('stt')}  tts: {engines.get('tts')}")
+    print(f"stt: {engines.get('stt')}  tts: {engines.get('tts')}{voice}")
     print(f"session: {msg.get('session_id')}")
     if msg.get("confirm"):
         print(f"waiting for yes or no: {msg['confirm']['question']}")
@@ -112,6 +113,9 @@ def _build_request(args: argparse.Namespace) -> dict[str, Any]:
         req = {"cmd": "confirm", "answer": c == "yes"}
     elif c == "set":
         req = {"cmd": "set", "key": args.key, "value": args.value}
+    elif c == "point":
+        req = {"cmd": "mascot", "action": "point", "x": args.x, "y": args.y,
+               "label": " ".join(args.label), "duration": args.duration}
     elif c == "events":
         req = {"cmd": "subscribe"}
     else:
@@ -132,7 +136,7 @@ def _parser() -> argparse.ArgumentParser:
         c.add_argument("--quiet", action="store_true", default=dflt(False), help="no audio for this turn")
         return c
 
-    p = argparse.ArgumentParser(prog="hark", description="Fast voice assistant.", parents=[flags(True)])
+    p = argparse.ArgumentParser(prog="omi", description="Omi voice assistant and desktop companion.", parents=[flags(True)])
     sub = p.add_subparsers(dest="command", required=True)
     _add = sub.add_parser
 
@@ -152,12 +156,17 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("status", help="show daemon state")
     sub.add_parser("yes", help="approve the pending confirmation")
     sub.add_parser("no", help="refuse the pending confirmation")
-    st = sub.add_parser("set", help="change a setting live (brain.talker, tts.engine, stt.engine)")
+    st = sub.add_parser("set", help="change a setting live (brain.talker, tts.engine, tts.voice, stt.engine)")
     st.add_argument("key")
     st.add_argument("value")
+    pt = sub.add_parser("point", help="move Omi on screen to point at (x, y)")
+    pt.add_argument("x", type=int)
+    pt.add_argument("y", type=int)
+    pt.add_argument("label", nargs="*")
+    pt.add_argument("--duration", type=int, default=6)
     sub.add_parser("events", help="print every daemon event as JSON lines")
-    for name, what in (("install", "add the Omarchy keys, bar widget and service"),
-                       ("uninstall", "remove what hark install added")):
+    for name, what in (("install", "add the Omarchy keys, mascot widget and service"),
+                       ("uninstall", "remove what omi install added")):
         sp = sub.add_parser(name, help=what)
         sp.add_argument("--no-activate", action="store_true",
                         help="only write or remove the files; leave systemd, the shell and Hyprland alone")

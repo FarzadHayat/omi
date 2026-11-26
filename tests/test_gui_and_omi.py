@@ -1,0 +1,116 @@
+"""Tests for Omi desktop GUI tools, Chrome safety rules, mascot events, and Kokoro voice defaults."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from pathlib import Path
+
+import pytest
+
+from hark import config, router
+from hark.daemon import Daemon
+from hark.session import Session
+from hark.tools import gui, safety
+from hark.tools.base import ToolRegistry
+from tests.fakes import CaptureOut, FakeBrain, FakeSTT, FakeTTS
+
+
+def test_omi_defaults():
+    cfg = config.Config()
+    assert cfg.name == "Omi"
+    assert cfg.tts.engine == "kokoro"
+    assert cfg.tts.kokoro_voice == "af_heart"
+    assert cfg.brain.claude.chrome is True
+
+
+def test_router_strips_omi_wake_words():
+    assert router.route("hey omi turn the volume up").tool == "volume"
+    assert router.route("omi what time is it").tool == "current_time"
+    assert router.route("oh me switch to workspace three").args == {"n": 3}
+
+
+def test_gui_command_builders(tmp_path):
+    p = tmp_path / "screen.jpg"
+    assert gui.build_capture_screen(p, 0.5) == ["grim", "-t", "jpeg", "-q", "82", "-s", "0.50", str(p)]
+    assert gui.build_movecursor(120, 340) == ["dispatch movecursor 120 340"]
+    assert gui.build_ydotool_click("left", 1) == ["ydotool", "click", "0xC0"]
+    assert gui.build_ydotool_click("right", 2) == ["ydotool", "click", "--repeat", "2", "--next-delay", "60", "0xC1"]
+    assert gui.build_ydotool_scroll(-4) == ["ydotool", "mousemove", "--wheel", "--", "0", "-4"]
+    with pytest.raises(ValueError):
+        gui.build_ydotool_click("banana")
+
+
+def test_ui_action_safety_blocks_destructive_labels(monkeypatch):
+    monkeypatch.setattr(gui, "focused_is_terminal", lambda: False)
+    gui._LAST_ELEMENTS[0] = gui.UiElement(0, "App", "push button", "Settings", 10, 10, 80, 30, ["click"], [0])
+    gui._LAST_ELEMENTS[1] = gui.UiElement(1, "App", "push button", "Delete Account", 10, 50, 80, 30, ["click"], [1])
+    gui._LAST_ELEMENTS[2] = gui.UiElement(2, "App", "push button", "Place Order", 10, 90, 80, 30, ["click"], [2])
+    assert gui.ui_action_safety({"index": 0, "action": "click"}) == "reversible"
+    assert gui.ui_action_safety({"index": 1, "action": "click"}) == "destructive"
+    assert gui.ui_action_safety({"index": 2, "action": "click"}) == "destructive"
+
+
+def test_chrome_mcp_safety_classification():
+    assert safety.classify_claude_tool("mcp__claude-in-chrome__read_page", {})[0] == "allow"
+    assert safety.classify_claude_tool("mcp__claude-in-chrome__tabs_context_mcp", {})[0] == "allow"
+    assert safety.classify_claude_tool("mcp__claude-in-chrome__navigate", {"url": "https://example.com"})[0] == "allow"
+    assert safety.classify_claude_tool("mcp__claude-in-chrome__navigate", {"url": "javascript:alert(1)"})[0] == "deny"
+    assert safety.classify_claude_tool("mcp__claude-in-chrome__computer", {"action": "left_click"})[0] == "allow"
+    assert safety.classify_claude_tool("mcp__claude-in-chrome__javascript_tool", {"text": "1+1"})[0] == "confirm"
+    assert safety.classify_claude_tool("mcp__claude-in-chrome__upload_image", {})[0] == "confirm"
+
+
+@pytest.mark.asyncio
+async def test_daemon_mascot_broadcasts_and_live_voice_set(tmp_path):
+    import shutil
+    import tempfile
+
+    sock_dir = Path(tempfile.mkdtemp(prefix="om", dir="/tmp"))
+    sock = sock_dir / "omi.sock"
+    cfg = config.Config()
+    from hark.events import TextDelta, TurnDone
+
+    session = Session(
+        stt=FakeSTT(),
+        tts=FakeTTS(),
+        brain=FakeBrain(lambda _: [(0.0, TextDelta("Hello there.")), (0.0, TurnDone())]),
+        registry=ToolRegistry(),
+        router=lambda _: None,
+        out=CaptureOut(),
+        state_dir=tmp_path,
+    )
+    switched: list[str] = []
+
+    async def set_voice(v: str):
+        switched.append(v)
+        return session.tts
+
+    daemon = Daemon(session, cfg, socket_path=sock, factories={"tts.voice": set_voice})
+    await daemon.start()
+    try:
+        sub_r, sub_w = await asyncio.open_unix_connection(str(sock))
+        sub_w.write(b'{"cmd":"subscribe"}\n')
+        await sub_w.drain()
+        assert json.loads(await sub_r.readline())["subscribed"] is True
+
+        # Mascot point broadcasts to subscribers
+        ok = await gui.notify_mascot({"action": "point", "x": 500, "y": 300, "label": "Here"}, socket_path=sock)
+        assert ok is True
+        ev = json.loads(await asyncio.wait_for(sub_r.readline(), 2.0))
+        assert ev["event"] == "mascot" and ev["x"] == 500 and ev["label"] == "Here"
+
+        # Live voice switch updates config
+        c_r, c_w = await asyncio.open_unix_connection(str(sock))
+        c_w.write(b'{"cmd":"set","key":"tts.voice","value":"bm_george"}\n')
+        await c_w.drain()
+        reply = json.loads(await asyncio.wait_for(c_r.readline(), 2.0))
+        assert reply["ok"] is True
+        assert switched == ["bm_george"]
+        assert cfg.tts.kokoro_voice == "bm_george"
+
+        c_w.close()
+        sub_w.close()
+    finally:
+        await daemon.close()
+        shutil.rmtree(sock_dir, ignore_errors=True)

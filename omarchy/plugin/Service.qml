@@ -3,15 +3,14 @@ import Quickshell
 import Quickshell.Io
 import "Model.js" as Model
 
-// The hark daemon as seen from the bar: one subscribed socket that streams every
-// event (no polling), plus a short-lived socket per typed request, because the
-// daemon answers a turn on the connection that asked for it and reads nothing
-// else from that connection until the turn ends.
+// The Omi daemon as seen from the bar and companion overlay: one subscribed socket
+// that streams every event (no polling), plus a short-lived socket per typed request.
 Item {
   id: root
 
-  readonly property string socketPath: Quickshell.env("HARK_SOCKET")
-    || (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/hark/hark.sock"
+  readonly property string socketPath: Quickshell.env("OMI_SOCKET")
+    || Quickshell.env("HARK_SOCKET")
+    || (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/omi/omi.sock"
 
   property QtObject sock: null  // the connected event socket
   readonly property bool connected: sock !== null
@@ -20,6 +19,10 @@ Item {
   property var lines: []        // [{ role: "user" | "assistant" | "progress", text }]
   property var confirm: null    // { id, question, detail } while a question waits
   property string notice: ""    // the last refusal from the daemon, shown briefly
+  property string lastUserText: ""
+  property string liveSpeech: ""     // spoken reply updated clause by clause
+  property string lastProgress: ""   // current background action label
+  property var mascot: null          // { action, x, y, w, h, label, duration } while pointing/moving
   property string _pendingSay: ""
 
   function receive(line) {
@@ -27,16 +30,41 @@ Item {
     if (!msg) return
     var ev = msg.event
     if (ev === "state") {
-      phase = Model.knownState(msg.state)
+      var next = Model.knownState(msg.state)
+      if (next === "listening") {
+        liveSpeech = ""
+        lastProgress = ""
+      }
+      phase = next
       if (phase !== "confirming") confirm = null
     } else if (ev === "transcript") {
       lines = Model.appendLine(lines, msg.role, msg.text)
+      if (msg.role === "user") {
+        lastUserText = Model.clip(msg.text, 240)
+        liveSpeech = ""
+      } else {
+        liveSpeech = Model.clip(msg.text, 600)
+      }
+    } else if (ev === "speech") {
+      var clause = Model.clip(msg.text, 300).trim()
+      if (clause !== "") {
+        liveSpeech = liveSpeech === "" ? clause : Model.clip(liveSpeech + " " + clause, 600)
+      }
     } else if (ev === "progress") {
       lines = Model.appendLine(lines, "progress", msg.text)
+      lastProgress = Model.clip(msg.text, 140)
+    } else if (ev === "mascot") {
+      var m = Model.mascotOf(msg)
+      mascot = m
+      if (m) {
+        mascotTimer.interval = m.duration * 1000
+        mascotTimer.restart()
+      } else {
+        mascotTimer.stop()
+      }
     } else if (ev === "confirm_request") {
       confirm = Model.confirmOf(msg)
     } else if (ev === undefined && msg.ok === true && typeof msg.state === "string") {
-      // The status reply sent right after connecting.
       phase = Model.knownState(msg.state)
       confirm = Model.confirmOf(msg.confirm)
     } else if (ev === undefined && msg.ok === false) {
@@ -49,14 +77,22 @@ Item {
     noticeTimer.restart()
   }
 
+  function clearMascot() {
+    mascot = null
+    mascotTimer.stop()
+  }
+
   function send(line) {
-    if (!sock) return false  // the panel already says the daemon is not running
+    if (!sock) return false
     sock.write(line)
     sock.flush()
     return true
   }
 
-  function stop() { send(Model.request("stop")) }
+  function stop() {
+    clearMascot()
+    send(Model.request("stop"))
+  }
 
   // Answers exactly the question on screen: the daemon refuses an id that is no
   // longer the one waiting, so a late click never approves a newer question.
@@ -81,6 +117,12 @@ Item {
     onTriggered: root.notice = ""
   }
 
+  Timer {
+    id: mascotTimer
+    interval: 8000
+    onTriggered: root.mascot = null
+  }
+
   // Quickshell's Socket cannot retry after a failed connect, so each attempt is a
   // fresh one, every two seconds while the daemon is away.
   Loader {
@@ -99,6 +141,7 @@ Item {
           if (root.sock === socket) root.sock = null
           root.phase = "offline"
           root.confirm = null
+          root.mascot = null
         }
       }
     }
@@ -118,7 +161,6 @@ Item {
       id: turnSocket
       path: root.socketPath
       connected: true
-      // The turn's events also reach the event socket; only a refusal matters here.
       parser: SplitParser {
         onRead: function(line) {
           var msg = Model.parseLine(line)

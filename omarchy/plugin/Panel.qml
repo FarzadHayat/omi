@@ -7,15 +7,13 @@ import qs.Commons as Commons
 import qs.Ui
 import "Model.js" as Model
 
-// Hark in the bar: a small mark for the assistant's state, and a panel with the
-// conversation, a field for typed requests, Yes and No while a question waits,
-// and Stop. Everything is reachable from the keyboard: arrows move the cursor,
-// Enter or Space acts, Y and N answer, Escape closes. omarchy-shell hark toggle
-// opens it from a key.
+// Omi in the bar: the animated Omi mascot showing live state, a keyboard-navigable
+// conversation panel, and the floating on-screen companion overlay.
+// omarchy-shell omi toggle opens the panel from a key.
 Panel {
   id: root
-  moduleName: "hark"
-  ipcTarget: "hark"
+  moduleName: "omi"
+  ipcTarget: "omi"
 
   readonly property color foreground: bar ? bar.foreground : Commons.Color.foreground
   readonly property color urgent: bar ? bar.urgent : Commons.Color.urgent
@@ -24,18 +22,26 @@ Panel {
 
   Commons.Translations { id: strings; directory: Qt.resolvedUrl("i18n") }
 
-  Service { id: hark }
+  Service { id: omi }
   // For the QML harness.
-  property alias service: hark
+  property alias service: omi
+  property alias companion: companionOverlay
 
-  readonly property string phase: hark.phase
+  readonly property string phase: omi.phase
   readonly property string stateLabel: strings.t("state." + phase)
   readonly property string accessibleLabel: strings.t("orb.label").arg(stateLabel)
+
+  // Floating on-screen Omi companion with live speech bubble and screen pointer.
+  CompanionOverlay {
+    id: companionOverlay
+    service: omi
+    strings: strings
+  }
 
   // The keyboard cursor walks these rows; Yes and No exist only while a question waits.
   property int rowIndex: 0
   property bool cursorActive: false
-  readonly property var rows: (hark.confirm ? ["yes", "no"] : []).concat(["input", "stop"])
+  readonly property var rows: (omi.confirm ? ["yes", "no"] : []).concat(["input", "stop"])
   readonly property string currentRow: cursorActive ? rows[Math.max(0, Math.min(rowIndex, rows.length - 1))] : ""
 
   function setRowCursor(id) {
@@ -49,10 +55,10 @@ Panel {
   }
 
   function activate(id) {
-    if (id === "yes") hark.answer(true)
-    else if (id === "no") hark.answer(false)
+    if (id === "yes") omi.answer(true)
+    else if (id === "no") omi.answer(false)
     else if (id === "input") focusInput()
-    else if (id === "stop") hark.stop()
+    else if (id === "stop") omi.stop()
   }
 
   function focusInput() {
@@ -60,7 +66,6 @@ Panel {
     input.forceActiveFocus()
   }
 
-  // Up or Down out of the text field hands the keys back to the cursor.
   function leaveInput(dy) {
     keyCatcher.forceActiveFocus()
     setRowCursor("input")
@@ -68,21 +73,19 @@ Panel {
   }
 
   function submit() {
-    if (hark.say(input.text)) input.text = ""
+    if (omi.say(input.text)) input.text = ""
   }
 
   onOpenedChanged: if (opened) {
-    cursorActive = hark.confirm !== null
+    cursorActive = omi.confirm !== null
     rowIndex = 0
     Qt.callLater(function() { transcriptView.positionViewAtEnd() })
   }
 
-  // A question that arrives while the panel is open takes the cursor to Yes,
-  // unless the user is typing.
   Connections {
-    target: hark
+    target: omi
     function onConfirmChanged() {
-      if (hark.confirm && root.opened && !input.activeFocus) {
+      if (omi.confirm && root.opened && !input.activeFocus) {
         keyCatcher.forceActiveFocus()
         root.setRowCursor("yes")
       }
@@ -96,21 +99,20 @@ Panel {
 
   BarIconButton {
     id: button
-    objectName: "harkButton"
+    objectName: "omiButton"
     anchors.fill: parent
     bar: root.bar
-    // The mark is drawn below rather than as a glyph, so its shape can change.
     iconComponent: Component { Item {} }
     tooltipText: root.accessibleLabel
     Accessible.role: Accessible.Button
     Accessible.name: root.accessibleLabel
     Accessible.description: strings.t("hint.talk")
 
-    Orb {
-      objectName: "barOrb"
+    OmiMascot {
+      objectName: "barMascot"
       x: (button.width - width) / 2
       y: (button.height - height) / 2
-      size: Style.bar.iconSize > 0 ? Style.bar.iconSize : Style.font.icon
+      size: Math.max(18, Style.bar.iconSize > 0 ? Style.bar.iconSize : Style.font.icon)
       phase: root.phase
       foreground: root.barForeground
       accent: Commons.Color.accent
@@ -127,8 +129,7 @@ Panel {
     owner: root
     bar: root.bar
     open: root.opened
-    // Straight into the field to type, unless a question waits or the field is off.
-    focusTarget: hark.confirm || !hark.connected ? keyCatcher : input
+    focusTarget: omi.confirm || !omi.connected ? keyCatcher : input
     contentWidth: panel.fittedContentWidth(Style.space(380))
     contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(560))
 
@@ -142,8 +143,8 @@ Panel {
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(t) {
         var key = t.toLowerCase()
-        if (key === "y" && hark.confirm) hark.answer(true)
-        else if (key === "n" && hark.confirm) hark.answer(false)
+        if (key === "y" && omi.confirm) omi.answer(true)
+        else if (key === "n" && omi.confirm) omi.answer(false)
         else if (key === "i") root.focusInput()
       }
 
@@ -153,14 +154,14 @@ Panel {
         width: parent.width - Style.space(4)
         spacing: Style.space(12)
 
-        // ---- Hero: the mark, the name and the state ----------------------
+        // ---- Hero: the animated Omi mascot, name and state ----------------
         RowLayout {
           Layout.fillWidth: true
           spacing: Style.space(14)
 
-          Orb {
-            objectName: "panelOrb"
-            size: Style.font.display
+          OmiMascot {
+            objectName: "panelMascot"
+            size: Math.max(36, Style.font.display)
             phase: root.phase
             foreground: root.foreground
             accent: Commons.Color.accent
@@ -186,8 +187,8 @@ Panel {
               objectName: "stateText"
               Layout.fillWidth: true
               textFormat: Text.PlainText
-              text: (hark.notice !== "" ? hark.notice : root.stateLabel).toUpperCase()
-              color: hark.notice !== "" ? root.urgent : root.dim
+              text: (omi.notice !== "" ? omi.notice : root.stateLabel).toUpperCase()
+              color: omi.notice !== "" ? root.urgent : root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
               font.bold: true
@@ -213,7 +214,7 @@ Panel {
 
         // ---- The conversation ---------------------------------------------
         Text {
-          visible: hark.lines.length === 0
+          visible: omi.lines.length === 0
           Layout.fillWidth: true
           textFormat: Text.PlainText
           text: strings.t("transcript.empty")
@@ -225,13 +226,13 @@ Panel {
         ListView {
           id: transcriptView
           objectName: "transcript"
-          visible: hark.lines.length > 0
+          visible: omi.lines.length > 0
           Layout.fillWidth: true
           Layout.preferredHeight: Math.min(contentHeight, Style.space(260))
           clip: true
           spacing: Style.space(8)
           boundsBehavior: Flickable.StopAtBounds
-          model: hark.lines
+          model: omi.lines
           onCountChanged: Qt.callLater(positionViewAtEnd)
           ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
           Accessible.role: Accessible.List
@@ -268,7 +269,7 @@ Panel {
         // ---- A question waiting for yes or no -----------------------------
         BorderSurface {
           objectName: "confirmCard"
-          visible: hark.confirm !== null
+          visible: omi.confirm !== null
           Layout.fillWidth: true
           implicitHeight: confirmColumn.implicitHeight + Style.space(20)
           color: "transparent"
@@ -295,7 +296,7 @@ Panel {
             Text {
               Layout.fillWidth: true
               textFormat: Text.PlainText
-              text: hark.confirm ? hark.confirm.question : ""
+              text: omi.confirm ? omi.confirm.question : ""
               color: root.foreground
               font.family: root.fontFamily
               font.pixelSize: Style.font.body
@@ -308,7 +309,7 @@ Panel {
               visible: text !== ""
               Layout.fillWidth: true
               textFormat: Text.PlainText
-              text: hark.confirm ? hark.confirm.detail : ""
+              text: omi.confirm ? omi.confirm.detail : ""
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.bodySmall
@@ -329,7 +330,7 @@ Panel {
                 foreground: root.foreground
                 fontFamily: root.fontFamily
                 onHovered: function(on) { if (on) root.setRowCursor("yes") }
-                onClicked: hark.answer(true)
+                onClicked: omi.answer(true)
                 Accessible.role: Accessible.Button
                 Accessible.name: text
               }
@@ -342,7 +343,7 @@ Panel {
                 foreground: root.foreground
                 fontFamily: root.fontFamily
                 onHovered: function(on) { if (on) root.setRowCursor("no") }
-                onClicked: hark.answer(false)
+                onClicked: omi.answer(false)
                 Accessible.role: Accessible.Button
                 Accessible.name: text
               }
@@ -365,7 +366,7 @@ Panel {
           id: input
           objectName: "requestField"
           Layout.fillWidth: true
-          enabled: hark.connected
+          enabled: omi.connected
           placeholderText: strings.t("input.placeholder")
           hasCursor: root.currentRow === "input"
           foreground: root.foreground
@@ -397,12 +398,12 @@ Panel {
             text: strings.t("stop")
             iconText: "\u{f04db}"
             bordered: true
-            enabled: hark.connected
+            enabled: omi.connected
             hasCursor: root.currentRow === "stop"
             foreground: root.foreground
             fontFamily: root.fontFamily
             onHovered: function(on) { if (on) root.setRowCursor("stop") }
-            onClicked: hark.stop()
+            onClicked: omi.stop()
             Accessible.role: Accessible.Button
             Accessible.name: text
           }

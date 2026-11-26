@@ -80,7 +80,9 @@ ShellRoot {
         shell.check("transcript", h.lines.length === 2 && h.lines[0].role === "user"
           && h.lines[1].text === "<b>not bold</b>", h.lines)
         shell.check("confirm", h.confirm.id === "q-1" && h.confirm.question === "Delete the file notes.txt?", h.confirm)
-        shell.check("accessible label", widget.accessibleLabel === "Hark: Waiting for your answer", widget.accessibleLabel)
+        shell.check("mascot point", h.mascot !== null && h.mascot.x === 420 && h.mascot.label === "Save button", h.mascot)
+        shell.check("companion shown", widget.companion.shown === true && widget.companion.interactive === true, widget.companion.shown)
+        shell.check("accessible label", widget.accessibleLabel === "Omi: Waiting for your answer", widget.accessibleLabel)
         widget.open()
         shell.step = 1
       } else if (shell.step === 1 && widget.opened) {
@@ -100,7 +102,7 @@ ShellRoot {
         shell.check("refusal shown", h.notice === "a question is waiting for the user's answer", h.notice)
         shell.step = 4
       } else if (shell.step === 4 && !h.connected) {
-        shell.check("offline when daemon goes", h.phase === "offline" && widget.accessibleLabel === "Hark: Not running", h.phase)
+        shell.check("offline when daemon goes", h.phase === "offline" && widget.accessibleLabel === "Omi: Not running", h.phase)
         console.log("HARNESS DONE")
         Qt.quit()
       }

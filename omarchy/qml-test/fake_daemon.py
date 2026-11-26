@@ -14,8 +14,10 @@ SCRIPT = [
     {"event": "transcript", "role": "user", "text": "delete my notes", "final": True},
     {"event": "state", "state": "thinking"},
     {"event": "state", "state": "speaking"},
+    {"event": "speech", "text": "Looking at your screen."},
     {"event": "transcript", "role": "assistant", "text": "<b>not bold</b>", "final": True},
     {"event": "state", "state": "acting"},
+    {"event": "mascot", "action": "point", "x": 420, "y": 310, "w": 80, "h": 40, "label": "Save button", "duration": 6},
     {"event": "state", "state": "confirming"},
     {"event": "confirm_request", "id": "q-1", "question": "Delete the file notes.txt?", "detail": "rm notes.txt"},
 ]

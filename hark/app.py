@@ -141,6 +141,14 @@ async def build(cfg: Config) -> Daemon:
         await asyncio.to_thread(_warm_tts, engine)
         return engine
 
+    async def new_voice(value: str) -> Any:
+        if hasattr(session.tts, "set_voice"):
+            session.tts.set_voice(value)
+            return session.tts
+        engine = await asyncio.to_thread(ttss.create, replace(cfg.tts, engine="kokoro", kokoro_voice=value))
+        await asyncio.to_thread(_warm_tts, engine)
+        return engine
+
     async def new_stt(value: str) -> Any:
         engine = await asyncio.to_thread(stts.create, replace(cfg.stt, engine=value))
         await asyncio.to_thread(_warm_stt, engine)
@@ -165,7 +173,12 @@ async def build(cfg: Config) -> Daemon:
         session,
         cfg,
         audio_in=PipeWireIn(cfg.audio.source),
-        factories={"brain.talker": new_talker, "tts.engine": new_tts, "stt.engine": new_stt},
+        factories={
+            "brain.talker": new_talker,
+            "tts.engine": new_tts,
+            "tts.voice": new_voice,
+            "stt.engine": new_stt,
+        },
         wav_out=WavOut,
         warmups=warmups,
         closers=[stop_sync],

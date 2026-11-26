@@ -248,7 +248,11 @@ async def test_status_and_set(daemon):
     await call(daemon, {"cmd": "say", "text": "hi", "quiet": True})
     st = (await call(daemon, {"cmd": "status"}))[-1]
     assert st["state"] == "idle" and st["talker"] == daemon.cfg.brain.talker and st["worker"] == "off"
-    assert st["engines"] == {"stt": daemon.cfg.stt.engine, "tts": "piper"}
+    assert st["engines"] == {
+        "stt": daemon.cfg.stt.engine,
+        "tts": daemon.cfg.tts.engine,
+        "voice": daemon.cfg.tts.kokoro_voice if daemon.cfg.tts.engine == "kokoro" else "",
+    }
     assert st["session_id"] == daemon.session.session_id and st["timing"]["path"] == "talker"
     old = daemon.session.brain
     assert (await call(daemon, {"cmd": "set", "key": "brain.talker", "value": "claude"}))[-1]["ok"]
@@ -340,7 +344,7 @@ async def test_cli_say_status_and_errors(daemon, capsys):
     sock = str(daemon.socket_path)
     code, out, _ = await run_cli(capsys, "--socket", sock, "say", "--quiet", "hello", "there")
     assert code == 0
-    assert "you: hello there" in out and "hark: Okay." in out and "timing: path=talker" in out
+    assert "you: hello there" in out and "omi: Okay." in out and "timing: path=talker" in out
     code, out, _ = await run_cli(capsys, "--socket", sock, "status")
     assert code == 0 and "state: idle" in out and f"talker: {daemon.cfg.brain.talker}" in out
     code, out, _ = await run_cli(capsys, "--socket", sock, "--json", "say", "hi", "--quiet")

@@ -15,13 +15,19 @@ from hark.config import HOME, Config
 from hark.events import WorkerDone, WorkerEvent, WorkerProgress
 from hark.tools.base import Tool, ToolResult
 
-WORKER_PROMPT = """You are the background worker of {name}, a voice assistant on the user's own computer.
+WORKER_PROMPT = """You are the background worker of {name}, a voice assistant and on-screen companion on the user's computer.
 You get one task at a time and do the real multi-step work yourself: read and edit files,
-run commands, search the web, use the hark device tools.
+run commands, control the browser (Claude in Chrome tools), control desktop apps, and answer visual questions about the screen.
+Always pick the fastest reliable tool for the job:
+1. Direct desktop/window/Omarchy tools (launch_or_focus, focus_window, media, volume, omarchy) for OS actions.
+2. Claude in Chrome tools for anything inside the web browser (reading tabs, navigating, clicking, filling forms, searching).
+3. `ui_inspect` + `ui_action` (AT-SPI) for clicking/typing inside desktop apps without screenshots.
+4. `capture_screen` + `Read` (on the saved JPEG) + `mouse_click` / `mouse_scroll` / `type_text` / `press_keys` for visual or complex GUI tasks.
+5. Call `point_at` or `highlight_window` whenever the user asks where something is or asks about something on screen, so your on-screen mascot flies over and points right at it.
 Work carefully: check what you find before you report it, and verify the result of every change.
 When you count, list or search a project's files, skip dependency and build folders such as
 .venv, venv, node_modules, .git, dist, build, target and __pycache__, unless the task is about them.
-Prefer read-only commands; every command that changes something has to be approved by the user aloud.
+Prefer read-only commands; every destructive action has to be approved by the user aloud.
 Never read, print or pass on secrets, keys, tokens or passwords.
 Your final message is read aloud to the user: end with one or two short spoken sentences
 saying what you did and the outcome. No markdown, lists, code, paths or URLs in that final message."""
@@ -38,7 +44,14 @@ _PHRASES = {
 
 
 def progress_phrase(tool: str) -> str:
+    if tool.startswith("mcp__claude-in-chrome__"):
+        return "Using the browser"
     if tool.startswith("mcp__hark__"):
+        name = tool.removeprefix("mcp__hark__")
+        if name in ("capture_screen", "screen_info", "ui_inspect"):
+            return "Looking at the screen"
+        if name in ("point_at", "highlight_window"):
+            return "Pointing it out"
         return "Using the computer"
     return _PHRASES.get(tool, "Working on it")
 
@@ -51,7 +64,7 @@ class ClaudeWorker:
         self.session = ClaudeSession(
             cfg.brain.claude.worker_model, WORKER_PROMPT.format(name=cfg.name),
             tools="default", setting_sources="user", use_mcp=use_mcp, cwd=str(HOME),
-            claude_cmd=claude_cmd)
+            claude_cmd=claude_cmd, chrome=cfg.brain.claude.chrome)
         self.progress_every_s = PROGRESS_EVERY_S
         self._jobs: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
         self._events: asyncio.Queue[WorkerEvent] = asyncio.Queue()

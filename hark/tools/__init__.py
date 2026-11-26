@@ -13,11 +13,11 @@ def build_registry(cfg: Config) -> ToolRegistry:
     """Every device tool. The caller sets registry.confirm (daemon: ask by voice;
     MCP server: ask through the daemon socket). With HARK_DRY_RUN=1 the device
     tools that change something only report what they would do."""
-    from hark.tools import hyprland, media, omarchy, system
+    from hark.tools import gui, hyprland, media, omarchy, system
 
     registry = ToolRegistry()
-    dry = os.environ.get("HARK_DRY_RUN") == "1"
-    for tool in [*hyprland.tools(), *media.tools(), *system.tools(), omarchy.make_tool()]:
+    dry = os.environ.get("HARK_DRY_RUN") == "1" or os.environ.get("OMI_DRY_RUN") == "1"
+    for tool in [*hyprland.tools(), *media.tools(), *system.tools(), *gui.tools(), omarchy.make_tool()]:
         registry.register(_dry(tool) if dry and tool.safety != "read" else tool)
     return registry
 

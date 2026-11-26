@@ -156,7 +156,7 @@ async def test_page_needs_an_allowed_tailscale_login(daemon):
     status, _, _ = await http_get(port, "/", {"Tailscale-User-Login": "someone@else.com"})
     assert status == 403
     status, hdrs, body = await http_get(port, "/", {"Tailscale-User-Login": ME})
-    assert status == 200 and b"<title>Hark</title>" in body
+    assert status == 200 and b"<title>Omi</title>" in body
     assert "default-src 'self'" in hdrs["Content-Security-Policy"]
     for path in ("/app.js", "/mic-worklet.js", "/sw.js", "/style.css", "/manifest.webmanifest", "/icon-192.png"):
         status, _, _ = await http_get(port, path, {"Tailscale-User-Login": ME})
