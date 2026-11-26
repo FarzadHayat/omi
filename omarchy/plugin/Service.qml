@@ -27,6 +27,7 @@ Item {
   property real cursorY: 0
   property bool hasCursor: false
   property bool wakeEnabled: false
+  property string wakeCallMode: "auto"  // auto (smart) | continuous | single
   property bool wakeConversational: true
   property string wakeSensitivity: "medium"
   property string talker: ""
@@ -90,6 +91,7 @@ Item {
       if (typeof msg.voice === "string" && msg.voice !== "") voice = msg.voice
       if (msg.wake) {
         if (typeof msg.wake.enabled === "boolean") wakeEnabled = msg.wake.enabled
+        if (typeof msg.wake.call_mode === "string") wakeCallMode = msg.wake.call_mode
         if (typeof msg.wake.conversational === "boolean") wakeConversational = msg.wake.conversational
         if (typeof msg.wake.sensitivity === "string") wakeSensitivity = msg.wake.sensitivity
       }
@@ -104,6 +106,7 @@ Item {
       if (Array.isArray(msg.voices) && msg.voices.length > 0) voices = msg.voices
       if (msg.wake) {
         if (typeof msg.wake.enabled === "boolean") wakeEnabled = msg.wake.enabled
+        if (typeof msg.wake.call_mode === "string") wakeCallMode = msg.wake.call_mode
         if (typeof msg.wake.conversational === "boolean") wakeConversational = msg.wake.conversational
         if (typeof msg.wake.sensitivity === "string") wakeSensitivity = msg.wake.sensitivity
       }
@@ -148,8 +151,14 @@ Item {
     return setSetting("wake.enabled", wakeEnabled ? "off" : "on")
   }
 
+  function cycleCallMode() {
+    var order = ["auto", "continuous", "single"]
+    var idx = order.indexOf(wakeCallMode)
+    return setSetting("wake.call_mode", order[(idx + 1) % order.length])
+  }
+
   function toggleCallMode() {
-    return setSetting("wake.conversational", wakeConversational ? "off" : "on")
+    return cycleCallMode()
   }
 
   function cycleSensitivity() {

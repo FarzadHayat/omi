@@ -15,7 +15,7 @@ threshold = 0.15         # Lower = more sensitive (0.10-0.25), higher = stricter
 score = 1.0              # Keyword boost score
 silence_ms = 750         # End-of-turn silence while speaking a command
 initial_timeout_s = 4.0  # Cancel if nothing is said right after waking Omi
-conversational = true    # Keep listening after each reply (phone-call mode)
+call_mode = "auto"       # "auto" (smart) | "continuous" | "single"
 followup_timeout_s = 12.0  # Prolonged silence ends the conversation automatically
 chime = true             # Soft rising chime on wake, descending chime on call end
 

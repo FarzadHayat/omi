@@ -49,6 +49,7 @@ SETTABLE = {
     "stt.engine": "stt",
 }
 WAKE_SENSITIVITY = {"low": 0.22, "medium": 0.15, "high": 0.10}
+WAKE_CALL_MODES = ("auto", "continuous", "single")
 KOKORO_VOICES = ("af_heart", "af_bella", "am_adam", "bf_emma", "bm_george")
 
 
@@ -557,7 +558,8 @@ class Daemon:
             "wake": {
                 "enabled": bool(self.cfg.wake.enabled and self.wake is not None and self.wake.active),
                 "configured": self.cfg.wake.enabled,
-                "conversational": self.cfg.wake.conversational,
+                "call_mode": self._call_mode(),
+                "conversational": self._call_mode() != "single",
                 "conversing": bool(self.wake is not None and getattr(self.wake, "conversing", False)),
                 "threshold": self.cfg.wake.threshold,
                 "sensitivity": sensitivity_label(self.cfg.wake.threshold),
@@ -581,7 +583,13 @@ class Daemon:
             except Exception as exc:
                 log.warning("could not save %s.%s to %s: %s", section, key, self.config_path, exc)
 
+    def _call_mode(self) -> str:
+        from hark.audio.wake import effective_call_mode
+
+        return effective_call_mode(self.cfg.wake)
+
     def _settings_event(self) -> dict[str, Any]:
+        mode = self._call_mode()
         return {
             "event": "settings",
             "talker": self.cfg.brain.talker,
@@ -589,7 +597,8 @@ class Daemon:
             "voice": self.cfg.tts.kokoro_voice if self.cfg.tts.engine == "kokoro" else "",
             "wake": {
                 "enabled": bool(self.cfg.wake.enabled and self.wake is not None and self.wake.active),
-                "conversational": self.cfg.wake.conversational,
+                "call_mode": mode,
+                "conversational": mode != "single",
                 "threshold": self.cfg.wake.threshold,
                 "sensitivity": sensitivity_label(self.cfg.wake.threshold),
             },
@@ -632,10 +641,24 @@ class Daemon:
             await self.broadcast({"event": "wake", "enabled": want})
             await self.broadcast(self._settings_event())
             return {"ok": True, "key": key, "value": "on" if want else "off"}
+        if key == "wake.call_mode":
+            raw = str(value).strip().lower() if isinstance(value, str) else ""
+            if raw == "smart":
+                raw = "auto"
+            if raw not in WAKE_CALL_MODES:
+                raise RequestError(f"wake.call_mode expects {', '.join(WAKE_CALL_MODES)}")
+            self.cfg.wake.call_mode = raw
+            self.cfg.wake.conversational = raw != "single"
+            self._persist("wake", "call_mode", raw, save)
+            self._persist("wake", "conversational", raw != "single", save)
+            await self.broadcast(self._settings_event())
+            return {"ok": True, "key": key, "value": raw}
         if key == "wake.conversational":
             want = self._parse_bool(value, key)
             self.cfg.wake.conversational = want
+            self.cfg.wake.call_mode = "continuous" if want else "single"
             self._persist("wake", "conversational", want, save)
+            self._persist("wake", "call_mode", self.cfg.wake.call_mode, save)
             await self.broadcast(self._settings_event())
             return {"ok": True, "key": key, "value": "on" if want else "off"}
         if key == "wake.sensitivity":
@@ -661,7 +684,7 @@ class Daemon:
             await self.broadcast(self._settings_event())
             return {"ok": True, "key": key, "value": label}
         if key not in SETTABLE:
-            all_keys = (*SETTABLE, "wake.enabled", "wake.conversational", "wake.sensitivity")
+            all_keys = (*SETTABLE, "wake.enabled", "wake.call_mode", "wake.conversational", "wake.sensitivity")
             raise RequestError(f"cannot set {key}; settable: {', '.join(all_keys)}")
         if not isinstance(value, str) or not value:
             raise RequestError("set needs a string value")

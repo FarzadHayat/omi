@@ -71,6 +71,12 @@ Panel {
     return strings.t("settings.medium")
   }
 
+  function callModeLabel(mode) {
+    if (mode === "continuous") return strings.t("settings.continuous")
+    if (mode === "single") return strings.t("settings.single_turn")
+    return strings.t("settings.smart")
+  }
+
   function setRowCursor(id) {
     cursorActive = true
     rowIndex = Math.max(0, rows.indexOf(id))
@@ -598,11 +604,11 @@ Panel {
 
               Button {
                 objectName: "callModeButton"
-                text: omi.wakeConversational ? strings.t("settings.continuous") : strings.t("settings.single_turn")
+                text: root.callModeLabel(omi.wakeCallMode)
                 bordered: true
-                foreground: omi.wakeConversational ? Commons.Color.accent : root.dim
+                foreground: omi.wakeCallMode !== "single" ? Commons.Color.accent : root.dim
                 fontFamily: root.fontFamily
-                onClicked: omi.toggleCallMode()
+                onClicked: omi.cycleCallMode()
                 Accessible.role: Accessible.Button
                 Accessible.name: strings.t("settings.call_mode") + ": " + text
               }

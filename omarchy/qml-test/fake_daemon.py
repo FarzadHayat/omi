@@ -51,7 +51,7 @@ async def main(sock_path: str, log_path: str) -> None:
                             {"name": "opencode", "installed": True, "model": "(cli default)"},
                         ],
                         "voices": ["af_heart", "af_bella", "am_adam", "bf_emma", "bm_george"],
-                        "wake": {"enabled": True, "conversational": True, "sensitivity": "medium", "phrases": ["hey omi"]},
+                        "wake": {"enabled": True, "call_mode": "auto", "conversational": True, "sensitivity": "medium", "phrases": ["omi", "hey omi"]},
                         "errors": {},
                     })
                 elif cmd == "subscribe":

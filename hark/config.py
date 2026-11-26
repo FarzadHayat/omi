@@ -170,7 +170,8 @@ class WakeConfig:
     score: float = 1.0
     silence_ms: int = 750  # hands-free end-of-turn pause while speaking
     initial_timeout_s: float = 4.0  # cancel if nothing is said right after wake word
-    conversational: bool = True  # keep listening after each reply like a phone call
+    call_mode: str = "auto"  # auto (smart) | continuous | single
+    conversational: bool = True  # legacy bool; false forces single-turn mode
     followup_timeout_s: float = 12.0  # drop back to standby after this much silence in call mode
     max_utterance_s: float = 15.0
     chime: bool = True

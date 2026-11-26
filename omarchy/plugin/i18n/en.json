@@ -30,6 +30,7 @@
   "settings.provider": "Provider",
   "settings.voice": "Voice",
   "settings.call_mode": "Call mode",
+  "settings.smart": "Smart",
   "settings.continuous": "Continuous",
   "settings.single_turn": "Single turn",
   "settings.sensitivity": "Wake sensitivity",

@@ -75,6 +75,13 @@ _GOODBYE_RE = re.compile(
 )
 
 
+_KEEP_TALKING_RE = re.compile(
+    r"\b(?:let's\s+(?:talk|chat)|talk\s+to\s+me|stay\s+on\s+the\s+line|keep\s+listening|"
+    r"chat\s+with\s+me|brainstorm)\b",
+    re.I,
+)
+
+
 def is_goodbye(text: str) -> bool:
     """True when a short spoken utterance ends an active hands-free conversation."""
     clean = re.sub(r"[^a-zA-Z0-9'\s]+", " ", text.replace("’", "'")).strip()
@@ -82,6 +89,52 @@ def is_goodbye(text: str) -> bool:
     if not clean or len(clean.split()) > 7:
         return False
     return bool(_GOODBYE_RE.fullmatch(clean))
+
+
+def effective_call_mode(cfg: WakeConfig) -> str:
+    """Resolved call mode: 'auto' (smart), 'continuous', or 'single'."""
+    if not cfg.conversational:
+        return "single"
+    mode = (cfg.call_mode or "auto").strip().lower()
+    return mode if mode in ("auto", "continuous", "single") else "auto"
+
+
+def should_continue_conversation(
+    mode: str,
+    *,
+    user_text: str,
+    reply: str = "",
+    path: str | None = None,
+    action_ms: float | None = None,
+    cancelled: bool = False,
+) -> bool:
+    """Decide whether Omi should keep the mic open after finishing a turn.
+
+    - 'single': never continue.
+    - 'continuous': always continue unless cancelled, empty, or user said goodbye.
+    - 'auto' (smart): drop back to standby after one-shot OS/tool commands with short
+      confirmations; keep listening for chats, explanations, troubleshooting, or
+      whenever Omi asked a follow-up question.
+    """
+    if cancelled or not user_text.strip() or is_goodbye(user_text):
+        return False
+    if mode == "single":
+        return False
+    if mode == "continuous":
+        return True
+    # Smart ('auto') mode:
+    if _KEEP_TALKING_RE.search(user_text):
+        return True
+    if path == "router":
+        return False
+    clean_reply = reply.strip()
+    if "?" in clean_reply:
+        return True
+    # A tool ran and Omi gave a short closed confirmation (e.g. "Switched to Gruvbox."):
+    # treat as a finished one-shot command rather than an open conversation.
+    if action_ms is not None and len(clean_reply.split()) <= 14:
+        return False
+    return True
 
 
 class Detector(Protocol):
@@ -423,8 +476,19 @@ class WakeListener:
                         turn_task = None
                         if self.conversing:
                             user_text = getattr(res, "user_text", "") if res is not None else ""
+                            reply = getattr(res, "reply", "") if res is not None else ""
+                            timing = getattr(res, "timing", None) or {} if res is not None else {}
                             cancelled = bool(getattr(res, "cancelled", False)) if res is not None else False
-                            if cancelled or not user_text or is_goodbye(user_text) or not self.cfg.conversational:
+                            mode = effective_call_mode(self.cfg)
+                            keep = should_continue_conversation(
+                                mode,
+                                user_text=user_text,
+                                reply=reply,
+                                path=timing.get("path"),
+                                action_ms=timing.get("action_ms"),
+                                cancelled=cancelled,
+                            )
+                            if not keep:
                                 await self._end_conversation(chime=False)
                                 cooldown_until = now + self._post_speech_cooldown_s
                                 await loop.run_in_executor(self._pool, self._detector.reset)
@@ -523,7 +587,7 @@ class WakeListener:
                     hit = await loop.run_in_executor(self._pool, self._detector.feed, chunk)
                     if hit:
                         log.info("wake word detected: %s", hit)
-                        self.conversing = bool(self.cfg.conversational)
+                        self.conversing = effective_call_mode(self.cfg) != "single"
                         if self._broadcast is not None:
                             await self._broadcast({"event": "wake", "phrase": hit, "conversing": self.conversing})
                         asyncio.create_task(self._play_tone(wake_chime_pcm, self._chime_fn))

@@ -58,6 +58,25 @@ def test_is_goodbye_and_router_goodbye():
     assert router.route("go to sleep") is None  # kept out of fast router per test_router
 
 
+def test_smart_call_mode_decides_per_turn():
+    fn = wake.should_continue_conversation
+    # One-shot routed OS commands drop straight back to standby
+    assert not fn("auto", user_text="turn the volume up", reply="Volume 60.", path="router", action_ms=15.0)
+    assert not fn("auto", user_text="open spotify", reply="Opening Spotify.", path="router", action_ms=20.0)
+    assert not fn("auto", user_text="what time is it", reply="It's 9:10 AM.", path="router", action_ms=1.0)
+    # Short closed tool confirmations from the LLM also drop back
+    assert not fn("auto", user_text="switch to gruvbox theme", reply="Switched to Gruvbox.", path="talker", action_ms=120.0)
+    # Chat, greetings, explanations, and follow-up questions stay open like a phone call
+    assert fn("auto", user_text="how are you", reply="Doing well! What can I help you with?", path="talker")
+    assert fn("auto", user_text="explain wayland vs x11", reply="Wayland lets apps render straight to the compositor.", path="talker")
+    assert fn("auto", user_text="what's failing in my terminal", reply="Pytest failed on test_wake. Want me to inspect it?", path="talker", action_ms=80.0)
+    assert fn("auto", user_text="let's brainstorm app names", reply="Sure.", path="talker", action_ms=10.0)
+    # Goodbyes always end even in continuous mode
+    assert not fn("continuous", user_text="see ya", reply="See ya.", path="router")
+    assert fn("continuous", user_text="turn the volume up", reply="Volume 60.", path="router", action_ms=10.0)
+    assert not fn("single", user_text="how are you", reply="Good! You?", path="talker")
+
+
 def test_wake_detector_real_model_hey_omi():
     cfg = config.WakeConfig()
     if not all((Path(cfg.model_dir) / f).is_file() for f in wake.MODEL_FILES):
