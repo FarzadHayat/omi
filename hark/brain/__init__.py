@@ -11,22 +11,32 @@ if TYPE_CHECKING:
 
 
 def create_talker(cfg: Config, registry: ToolRegistry) -> Brain:
-    if cfg.brain.talker == "claude":
+    from hark.brain.cli_providers import CLI_PROVIDERS, CliBrain, resolve_provider
+
+    choice = resolve_provider(cfg.brain.talker, role="talker")
+    if choice == "claude":
         from hark.brain.claude import ClaudeBrain
 
         return ClaudeBrain(cfg)
-    if cfg.brain.talker == "local":
+    if choice == "local":
         from hark.brain.local import LocalBrain
 
         return LocalBrain(cfg.brain.local, registry, cfg.name)
+    if choice in CLI_PROVIDERS:
+        return CliBrain(choice, cfg)
     raise ValueError(f"unknown talker: {cfg.brain.talker}")
 
 
 def create_worker(cfg: Config) -> Worker | None:
-    if cfg.brain.worker == "off":
+    from hark.brain.cli_providers import CLI_PROVIDERS, CliWorker, resolve_provider
+
+    choice = resolve_provider(cfg.brain.worker, role="worker")
+    if choice == "off":
         return None
-    if cfg.brain.worker == "claude":
+    if choice == "claude":
         from hark.worker import ClaudeWorker
 
         return ClaudeWorker(cfg)
+    if choice in CLI_PROVIDERS:
+        return CliWorker(choice, cfg)
     raise ValueError(f"unknown worker: {cfg.brain.worker}")

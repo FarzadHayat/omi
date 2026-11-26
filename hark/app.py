@@ -137,6 +137,21 @@ async def build(cfg: Config) -> Daemon:
         await brain.start(memory.context())
         return brain
 
+    async def new_model(value: str) -> Any:
+        talker = getattr(session.brain, "name", cfg.brain.talker)
+        if talker == "claude":
+            bcfg = replace(cfg.brain, talker="claude", claude=replace(cfg.brain.claude, model=value))
+        elif talker in ("local", "openai"):
+            bcfg = replace(cfg.brain, talker="local", local=replace(cfg.brain.local, model_name=value))
+        elif hasattr(cfg.brain, talker):
+            pcfg = getattr(cfg.brain, talker)
+            bcfg = replace(cfg.brain, talker=talker, **{talker: replace(pcfg, model=value)})
+        else:
+            raise ValueError(f"cannot set model for unknown talker {talker}")
+        brain = brains.create_talker(replace(cfg, brain=bcfg), registry)
+        await brain.start(memory.context())
+        return brain
+
     async def new_tts(value: str) -> Any:
         engine = await asyncio.to_thread(ttss.create, replace(cfg.tts, engine=value))
         await asyncio.to_thread(_warm_tts, engine)
@@ -176,6 +191,7 @@ async def build(cfg: Config) -> Daemon:
         audio_in=PipeWireIn(cfg.audio.source),
         factories={
             "brain.talker": new_talker,
+            "brain.model": new_model,
             "tts.engine": new_tts,
             "tts.voice": new_voice,
             "stt.engine": new_stt,

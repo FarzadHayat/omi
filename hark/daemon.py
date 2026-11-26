@@ -41,7 +41,13 @@ log = logging.getLogger(__name__)
 Factory = Callable[[str], Awaitable[Any]]
 Job = Callable[[], Awaitable[Any]]
 # Settable keys and the Session attribute each one swaps.
-SETTABLE = {"brain.talker": "brain", "tts.engine": "tts", "tts.voice": "tts", "stt.engine": "stt"}
+SETTABLE = {
+    "brain.talker": "brain",
+    "brain.model": "brain",
+    "tts.engine": "tts",
+    "tts.voice": "tts",
+    "stt.engine": "stt",
+}
 MAX_REQUEST = 1 << 22  # bytes in one request line
 OUTBOX_LIMIT = 2000  # queued lines per client before a client that does not read is dropped
 SHUTDOWN_JOB_S = 5.0  # the after-session memory job gets this long when the daemon stops
@@ -519,12 +525,15 @@ class Daemon:
             errors["speaker"] = out_error
         if self.wake is not None and getattr(self.wake, "error", None):
             errors["wake"] = self.wake.error
+        talker = self.cfg.brain.talker
+        talker_model = self._active_model(talker)
         return {
             "ok": True,
             "name": self.cfg.name,
             "state": s.state.value,
             "ready": self.ready.is_set(),
-            "talker": self.cfg.brain.talker,
+            "talker": talker,
+            "talker_model": talker_model,
             "worker": self.cfg.brain.worker if s.worker is not None else "off",
             "wake": {
                 "enabled": bool(self.cfg.wake.enabled and self.wake is not None and self.wake.active),
@@ -541,6 +550,14 @@ class Daemon:
             "confirm": s.pending_confirm,
             "errors": errors,
         }
+
+    def _active_model(self, talker: str) -> str:
+        if talker == "claude":
+            return self.cfg.brain.claude.model
+        if talker in ("local", "openai"):
+            return self.cfg.brain.local.model_name
+        pcfg = getattr(self.cfg.brain, talker, None)
+        return getattr(pcfg, "model", "") if pcfg is not None else ""
 
     async def _set(self, key: Any, value: Any) -> dict[str, Any]:
         if key == "wake.enabled":
@@ -586,10 +603,20 @@ class Daemon:
             asyncio.ensure_future(_quietly(old.close()))
         if key == "tts.voice":
             self.cfg.tts.kokoro_voice = value
+        elif key == "brain.talker":
+            self.cfg.brain.talker = getattr(new, "name", value) if value in ("auto", "openai") else value
+        elif key == "brain.model":
+            talker = self.cfg.brain.talker
+            if talker == "claude":
+                self.cfg.brain.claude.model = value
+            elif talker in ("local", "openai"):
+                self.cfg.brain.local.model_name = value
+            elif (pcfg := getattr(self.cfg.brain, talker, None)) is not None and hasattr(pcfg, "model"):
+                pcfg.model = value
         else:
             section, name = key.split(".")
             setattr(getattr(self.cfg, section), name, value)
-        return {"ok": True, "key": key, "value": value}
+        return {"ok": True, "key": key, "value": self.cfg.brain.talker if key == "brain.talker" else value}
 
     async def _turn(self, conn: Conn, req: dict[str, Any], utterance: bool = False, **kw: Any) -> dict[str, Any]:
         await self.ready.wait()

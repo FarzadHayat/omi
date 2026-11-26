@@ -15,6 +15,7 @@ A local-first voice assistant and animated on-screen companion for Omarchy & Hyp
   - **Browser**: Claude in Chrome MCP integration on the background worker for reading tabs, navigating, clicking, and filling forms.
   - **Terminal & T3 Code**: Inspect and run commands in live **Herdr** or **tmux** panes, and list, read, start, or message **T3 Code** threads via the `t3` CLI.
 - **Safety guardrails**: Hard-blocks reading secrets/keys/tokens and asks for spoken or on-screen confirmation before destructive commands, terminal mutations, or sensitive actions.
+- **Model-agnostic & subscription-first**: Works with your existing AI CLI subscriptions (no API keys needed) — **Claude Code** (`claude`), **OpenCode** (`opencode`, free models / Copilot / multi-provider subs), **Codex** (`codex`, ChatGPT Plus/Pro), **Antigravity** (`agy`, Google AI Pro/Ultra), **Gemini CLI** (`gemini`), or any **local / OpenAI-compatible** endpoint (`llama-server`, Ollama, LM Studio, OpenRouter, xAI/Grok). Switch providers or models live with `omi set brain.talker <provider>` and `omi set brain.model <model>`.
 - **Persistent compacting memory**: Markdown facts + rolling session digests + SQLite FTS5 search, with optional read-only shared memory directory (e.g. an Obsidian/Syncthing folder).
 - **Private mobile/tablet web UI**: Optional local web PWA served on `127.0.0.1:47911` for private access via `tailscale serve`.
 
@@ -37,7 +38,8 @@ _Screenshot coming soon._
 
 - Arch Linux / [Omarchy](https://omarchy.org) with Hyprland, `omarchy-shell` (Quickshell), PipeWire, `wtype`, `wl-clipboard`, `grim`
 - Python 3.12+ and [`uv`](https://docs.astral.sh/uv/)
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (default talker/worker) **or** `llama-server` / any OpenAI-compatible endpoint (`brain.talker = "local"`)
+- At least one AI backend (subscription CLI or local/OpenAI-compatible):
+  - **Claude Code** (`claude` — Claude Pro/Max), **OpenCode** (`opencode` — free / Copilot / subs), **Codex** (`codex` — ChatGPT Plus/Pro), **Antigravity** (`agy` — Google AI Pro/Ultra), **Gemini CLI** (`gemini`), **or** `llama-server` / Ollama / any OpenAI-compatible endpoint (`brain.talker = "local"`)
 - Optional:
   - `ydotool` (enabled as a user service) for visual mouse clicks/scrolls
   - `python-gobject` + `at-spi2-core` for AT-SPI UI inspection
@@ -78,9 +80,11 @@ Copy [`config.example.toml`](config.example.toml) to `~/.config/omi/config.toml`
 Live runtime tweaks:
 
 ```bash
+omi providers                  # see all supported providers & installed CLIs
+omi set brain.talker opencode  # switch provider live (claude|opencode|codex|agy|gemini|local|auto)
+omi set brain.model sonnet     # switch active talker model live
 omi set tts.voice bm_george    # switch Kokoro voice live
 omi set wake.enabled off       # pause/resume always-on wake word live
-omi set brain.talker local     # switch to local LLM
 omi say "what's running in my terminal?"
 ```
 

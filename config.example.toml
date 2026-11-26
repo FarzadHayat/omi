@@ -29,16 +29,41 @@ kokoro_voice = "af_heart"  # e.g. af_heart, af_bella, am_adam, bf_emma, bm_georg
 speed = 1.0
 
 [brain]
-talker = "claude"  # "claude" | "local"
-worker = "claude"  # "claude" | "off"
+# Talker: claude | opencode | codex | agy | gemini | local | openai | auto
+# Worker: claude | opencode | codex | agy | gemini | off | auto
+# Subscription CLIs use your existing CLI login (no API keys required).
+talker = "claude"
+worker = "claude"
 
 [brain.claude]
 model = "haiku"
 worker_model = "sonnet"
 chrome = true  # allow background worker to use Claude in Chrome MCP tools
 
+[brain.opencode]
+# Empty = use your OpenCode default model (e.g. "opencode/deepseek-v4.1-flash-free")
+model = ""
+worker_model = ""
+
+[brain.codex]
+# Uses your ChatGPT Plus/Pro login in `codex` (empty = Codex default model)
+model = ""
+worker_model = ""
+
+[brain.agy]
+# Uses your Antigravity / Google AI Pro/Ultra login in `agy`
+model = ""
+worker_model = ""
+effort = "low"
+
+[brain.gemini]
+# Uses your Google account login in `gemini` CLI
+model = ""
+worker_model = ""
+
 [brain.local]
-# Set base_url to use any OpenAI-compatible server; leave empty to auto-start llama-server.
+# Works with llama-server (leave base_url empty), Ollama ("http://127.0.0.1:11434/v1"),
+# LM Studio, OpenRouter, xAI/Grok ("https://api.x.ai/v1"), or any OpenAI-compatible API.
 base_url = ""
 api_key_env = ""
 model_name = "local"

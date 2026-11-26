@@ -113,14 +113,24 @@ class ClaudeConfig:
 
 
 @dataclass
+class CliProviderConfig:
+    model: str = ""  # empty = use the CLI's default configured model
+    worker_model: str = ""  # empty = fall back to model or CLI default
+    effort: str = ""  # optional reasoning effort (e.g. "low" for fast voice talker)
+
+
+@dataclass
 class BrainConfig:
-    # local | claude : who you converse with. Claude measured faster here (first audio
-    # 881 vs 1284 ms on chat, action 852 vs 1733 ms on tool turns) and answered 10 of 10
-    # test prompts well against about 8 for the local 4B model. Local works offline.
+    # claude | opencode | codex | agy | gemini | local | openai | auto
     talker: str = "claude"
-    worker: str = "claude"  # claude | off  : who does long multi-step jobs
+    # claude | opencode | codex | agy | gemini | off | auto
+    worker: str = "claude"
     local: LocalLlmConfig = field(default_factory=LocalLlmConfig)
     claude: ClaudeConfig = field(default_factory=ClaudeConfig)
+    opencode: CliProviderConfig = field(default_factory=CliProviderConfig)
+    codex: CliProviderConfig = field(default_factory=CliProviderConfig)
+    agy: CliProviderConfig = field(default_factory=lambda: CliProviderConfig(effort="low"))
+    gemini: CliProviderConfig = field(default_factory=CliProviderConfig)
 
 
 @dataclass

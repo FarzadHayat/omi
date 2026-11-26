@@ -8,7 +8,7 @@ import pytest
 
 from hark.events import State, TextDelta, ToolEnd, ToolStart, TurnDone, WorkerDone, WorkerProgress
 from hark.memory.base import Hit
-from hark.session import CANCELLED_NOTE, HISTORY_LIMIT, NO_AUDIO, Session, parse_answer, parse_yes_no
+from hark.session import CANCELLED_NOTE, HISTORY_LIMIT, NO_AUDIO, Session, parse_answer, parse_yes_no, spoken_error
 from tests.fakes import (
     CaptureOut,
     Events,
@@ -370,6 +370,18 @@ async def test_brain_tool_events_and_error(tmp_path):
     s.brain = FakeBrain([(0.0, TurnDone(error="model down"))])
     res = await s.run_turn("hi")
     assert res.reply == "Sorry, something went wrong." and res.error == "model down"
+
+
+async def test_brain_usage_limit_is_spoken_plainly(tmp_path):
+    s, _ = make(tmp_path)
+    s.brain = FakeBrain([(0.0, TurnDone(error="You've hit your 5-hour limit · resets 7:50pm (Australia/Brisbane)"))])
+    res = await s.run_turn("hi")
+    assert res.reply == "I've hit my usage limit. It resets at 7:50pm."
+
+
+def test_spoken_error_keeps_other_failures_vague():
+    assert spoken_error("model down") == "Sorry, something went wrong."
+    assert spoken_error("rate limit reached") == "I've hit my usage limit. Try again later."
 
 
 async def test_quiet_turn_skips_tts(tmp_path):

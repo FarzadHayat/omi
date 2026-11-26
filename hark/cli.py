@@ -87,8 +87,9 @@ def _print_human(msg: dict[str, Any]) -> None:
 def _print_status(msg: dict[str, Any]) -> None:
     engines = msg.get("engines") or {}
     voice = f" ({engines['voice']})" if engines.get("voice") else ""
+    tmodel = f" ({msg['talker_model']})" if msg.get("talker_model") else ""
     print(f"state: {msg.get('state')}{'' if msg.get('ready', True) else ' (warming up)'}")
-    print(f"talker: {msg.get('talker')}  worker: {msg.get('worker')}")
+    print(f"talker: {msg.get('talker')}{tmodel}  worker: {msg.get('worker')}")
     print(f"stt: {engines.get('stt')}  tts: {engines.get('tts')}{voice}")
     wake = msg.get("wake") or {}
     if wake:
@@ -161,9 +162,10 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("status", help="show daemon state")
     sub.add_parser("yes", help="approve the pending confirmation")
     sub.add_parser("no", help="refuse the pending confirmation")
-    st = sub.add_parser("set", help="change a setting live (brain.talker, tts.engine, tts.voice, stt.engine, wake.enabled)")
+    st = sub.add_parser("set", help="change a setting live (brain.talker, brain.model, tts.engine, tts.voice, stt.engine, wake.enabled)")
     st.add_argument("key")
     st.add_argument("value")
+    sub.add_parser("providers", help="list supported AI providers and which CLIs are installed")
     pt = sub.add_parser("point", help="move Omi on screen to point at (x, y)")
     pt.add_argument("x", type=int)
     pt.add_argument("y", type=int)
@@ -194,6 +196,37 @@ def _run_daemon() -> int:
     return 0
 
 
+def _print_providers(sock_path: Path, *, as_json: bool = False) -> int:
+    from hark.brain.cli_providers import available_providers
+
+    cfg = config.load()
+    rows = available_providers(cfg)
+    try:
+        for msg in request(sock_path, {"cmd": "status"}):
+            if msg.get("ok"):
+                live_talker = msg.get("talker")
+                live_worker = msg.get("worker")
+                for r in rows:
+                    r["active_talker"] = r["name"] == live_talker
+                    r["active_worker"] = r["name"] == live_worker
+                break
+    except (NotRunning, ConnectionError, Incomplete, json.JSONDecodeError):
+        pass
+    if as_json:
+        print(json.dumps(rows))
+        return 0
+    for r in rows:
+        status = "installed" if r["installed"] else "not found"
+        tags = []
+        if r["active_talker"]:
+            tags.append("talker")
+        if r["active_worker"]:
+            tags.append("worker")
+        active = f" [{', '.join(tags)}]" if tags else ""
+        print(f"{r['name']:10} {status:10} model={r['model']:24}{active}  - {r['auth']}")
+    return 0
+
+
 def _pending_question(path: Path) -> dict[str, Any] | None:
     for msg in request(path, {"cmd": "status"}):
         return msg.get("confirm")
@@ -204,6 +237,8 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "daemon":
         return _run_daemon()
+    if args.command == "providers":
+        return _print_providers(args.socket or config.SOCKET_PATH, as_json=args.json)
     if args.command in ("install", "uninstall"):
         from hark import install
 

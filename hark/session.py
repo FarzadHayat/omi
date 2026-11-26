@@ -64,6 +64,8 @@ CANCELLED_NOTE = "Okay, I cancelled that."
 NO_AUDIO = "No audio came in. Is a microphone connected?"
 STT_SLOTS = 2  # transcriptions at once: a stale one that cannot be stopped, plus the current one
 
+_LIMIT = re.compile(r"(hit|reached).{0,20}(limit|quota)|usage limit|rate limit", re.I)
+_RESET = re.compile(r"resets ([^.]+)", re.I)
 _NO = re.compile(r"\b(no|nope|nah|cancel|stop|abort|don't|dont|do not|not|never mind|nevermind|wait|hold on)\b")
 _YES_WORDS = {"yes", "yeah", "yep", "yup", "confirm", "confirmed", "please", "do-it", "go-ahead", "go-for-it"}
 _YES_CORE = _YES_WORDS - {"please"}
@@ -92,6 +94,17 @@ def parse_answer(text: str) -> bool | None:
 def parse_yes_no(text: str) -> bool:
     """True only for a clear yes."""
     return parse_answer(text) is True
+
+
+def spoken_error(error: str) -> str:
+    """What to say when the brain fails. A usage limit gets a real reason, since the user
+    cannot fix it and needs to know when it clears; anything else stays vague rather than
+    reading out a traceback."""
+    if _LIMIT.search(error):
+        reset = _RESET.search(error)
+        when = re.sub(r"\s*\([^)]*\)", "", reset.group(1)).strip() if reset else ""
+        return f"I've hit my usage limit. It resets at {when}." if when else "I've hit my usage limit. Try again later."
+    return SORRY
 
 
 @dataclass
@@ -630,7 +643,8 @@ class Session:
                 pass
         say(chunker.flush())
         if error and not speaker.queued:
-            speaker.say(SORRY)
+            log.warning("brain turn failed: %s", error)
+            speaker.say(spoken_error(error))
         return error
 
     async def _finish_turn(

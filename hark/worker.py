@@ -46,8 +46,8 @@ _PHRASES = {
 def progress_phrase(tool: str) -> str:
     if tool.startswith("mcp__claude-in-chrome__"):
         return "Using the browser"
-    if tool.startswith("mcp__hark__"):
-        name = tool.removeprefix("mcp__hark__")
+    if tool.startswith(("mcp__hark__", "mcp__omi__")):
+        name = tool.split("__", 2)[-1]
         if name in ("capture_screen", "screen_info", "ui_inspect"):
             return "Looking at the screen"
         if name in ("point_at", "highlight_window"):
@@ -57,6 +57,14 @@ def progress_phrase(tool: str) -> str:
         if name.startswith("t3_"):
             return "Using T3 Code"
         return "Using the computer"
+    if tool in ("capture_screen", "screen_info", "ui_inspect"):
+        return "Looking at the screen"
+    if tool in ("point_at", "highlight_window"):
+        return "Pointing it out"
+    if tool.startswith("terminal_"):
+        return "Checking the terminal"
+    if tool.startswith("t3_"):
+        return "Using T3 Code"
     return _PHRASES.get(tool, "Working on it")
 
 
