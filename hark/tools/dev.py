@@ -375,6 +375,10 @@ async def t3_threads(project: str = "", limit: int = 8) -> ToolResult:
     if not t3:
         return ToolResult(False, "T3 Code CLI is not installed on this machine.")
     rc, out, err = await run(build_t3_threads(t3, project), timeout=15.0)
+    if rc != 0 and not project.strip():
+        scratch = Path.home() / ".t3/scratch"
+        if scratch.is_dir():
+            rc, out, err = await run(build_t3_threads(t3, str(scratch)), timeout=15.0)
     if rc != 0:
         msg = (err or out).strip().splitlines()
         return ToolResult(False, f"Could not list T3 Code threads: {msg[0] if msg else 'exit ' + str(rc)}")
@@ -491,7 +495,7 @@ def tools() -> list[Tool]:
         Tool("terminal_open", "Open or split a terminal pane (Herdr, tmux, or system terminal), optionally in a directory.",
              _schema({"directory": s, "command": s, "direction": {"type": "string", "enum": ["right", "down"]}}),
              "reversible", terminal_open, terminal_open_question, terminal_command_safety),
-        Tool("t3_threads", "List active and recent T3 Code threads, optionally filtered by project path or ID.",
+        Tool("t3_threads", "List T3 Code threads for a project folder path or ID (defaults to current or Scratch project).",
              _schema({"project": s, "limit": i}), "read", t3_threads),
         Tool("t3_read", "Read recent messages and status of a T3 Code thread by ID.",
              _schema({"thread": s, "messages": i}, ["thread"]), "read", t3_read),
