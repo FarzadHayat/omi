@@ -163,11 +163,12 @@ Panel {
     open: root.opened
     focusTarget: omi.confirm || !omi.connected ? keyCatcher : input
     contentWidth: panel.fittedContentWidth(Style.space(380))
-    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(560))
+    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(620))
 
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
+      clip: true
       blocked: input.activeFocus
       onMoveRequested: function(dx, dy) { if (dy !== 0) root.moveCursor(dy) }
       onActivateRequested: if (root.cursorActive) root.activate(root.currentRow)
@@ -182,9 +183,10 @@ Panel {
 
       ColumnLayout {
         id: column
-        x: Style.space(2)
-        width: parent.width - Style.space(4)
-        spacing: Style.space(12)
+        anchors.fill: parent
+        anchors.leftMargin: Style.space(2)
+        anchors.rightMargin: Style.space(2)
+        spacing: Style.space(10)
 
         // ---- Hero: the animated Omi mascot, name and state ----------------
         RowLayout {
@@ -288,7 +290,10 @@ Panel {
           objectName: "transcript"
           visible: omi.lines.length > 0
           Layout.fillWidth: true
-          Layout.preferredHeight: Math.min(contentHeight, Style.space(260))
+          Layout.fillHeight: true
+          Layout.minimumHeight: Math.min(contentHeight, Style.space(72))
+          Layout.preferredHeight: Math.min(contentHeight, root.settingsOpen ? Style.space(150) : Style.space(260))
+          Layout.maximumHeight: Math.max(Style.space(72), contentHeight)
           clip: true
           spacing: Style.space(8)
           boundsBehavior: Flickable.StopAtBounds
