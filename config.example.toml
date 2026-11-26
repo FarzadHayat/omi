@@ -7,6 +7,7 @@ name = "Omi"
 source = ""        # PipeWire mic source name; empty = default microphone
 sink = ""          # PipeWire output sink; empty = default output ("null" = silent)
 silence_ms = 300   # Hands-free silence window in milliseconds
+sounds = true      # Cute soft-bell UI & voice sound effects (wake, heard, acting, confirm, done, sleep)
 
 [wake]
 enabled = true

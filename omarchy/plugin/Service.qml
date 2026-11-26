@@ -30,6 +30,7 @@ Item {
   property string wakeCallMode: "auto"  // auto (smart) | continuous | single
   property bool wakeConversational: true
   property string wakeSensitivity: "medium"
+  property bool soundsEnabled: true
   property string talker: ""
   property string voice: "af_heart"
   property var providers: []
@@ -95,6 +96,7 @@ Item {
         if (typeof msg.wake.conversational === "boolean") wakeConversational = msg.wake.conversational
         if (typeof msg.wake.sensitivity === "string") wakeSensitivity = msg.wake.sensitivity
       }
+      if (msg.audio && typeof msg.audio.sounds === "boolean") soundsEnabled = msg.audio.sounds
     } else if (ev === "confirm_request") {
       confirm = Model.confirmOf(msg)
     } else if (ev === undefined && msg.ok === true && typeof msg.state === "string") {
@@ -110,6 +112,7 @@ Item {
         if (typeof msg.wake.conversational === "boolean") wakeConversational = msg.wake.conversational
         if (typeof msg.wake.sensitivity === "string") wakeSensitivity = msg.wake.sensitivity
       }
+      if (msg.audio && typeof msg.audio.sounds === "boolean") soundsEnabled = msg.audio.sounds
       var errText = ""
       if (msg.errors && typeof msg.errors === "object") {
         var keys = Object.keys(msg.errors)
@@ -159,6 +162,10 @@ Item {
 
   function toggleCallMode() {
     return cycleCallMode()
+  }
+
+  function toggleSounds() {
+    return setSetting("audio.sounds", soundsEnabled ? "off" : "on")
   }
 
   function cycleSensitivity() {

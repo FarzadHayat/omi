@@ -36,5 +36,8 @@
   "settings.sensitivity": "Wake sensitivity",
   "settings.low": "Low",
   "settings.medium": "Medium",
-  "settings.high": "High"
+  "settings.high": "High",
+  "settings.sounds": "Sound effects",
+  "settings.on": "On",
+  "settings.off": "Off"
 }

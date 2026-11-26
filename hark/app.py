@@ -53,6 +53,7 @@ async def build(cfg: Config) -> Daemon:
     from hark import tts as ttss
     from hark.audio.file import NullOut, WavOut
     from hark.audio.pipewire import PipeWireIn, PipeWireOut
+    from hark.audio.sfx import SfxPlayer
     from hark.memory import jobs
     from hark.memory.tools import memory_tools
     from hark.router import route, warm
@@ -119,6 +120,7 @@ async def build(cfg: Config) -> Daemon:
         if after != before and not session.closed and session.state is State.IDLE and session.pending_confirm is None:
             await session.brain.start(after)
 
+    sfx = SfxPlayer(sink=cfg.audio.sink, enabled=lambda: cfg.audio.sounds)
     session = Session(
         stt=stt,
         tts=tts,
@@ -129,6 +131,7 @@ async def build(cfg: Config) -> Daemon:
         memory=memory,
         worker=worker,
         on_session_end=on_session_end,
+        play_sfx=sfx.play,
     )
     registry.confirm = session.confirm
 
@@ -204,6 +207,7 @@ async def build(cfg: Config) -> Daemon:
         errors=errors,
         track_cursor=bool(os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")),
         config_path=CONFIG_PATH,
+        play_sfx=sfx.play,
     )
     if cfg.web.enabled:
         from hark.web.server import WebServer
@@ -218,6 +222,7 @@ async def build(cfg: Config) -> Daemon:
         audio_sink=cfg.audio.sink,
         is_ptt_active=lambda: daemon._listening,
         broadcast=daemon.broadcast,
+        play_sfx=sfx.play,
     )
     return daemon
 

@@ -173,12 +173,14 @@ class Daemon:
         wake: Any = None,
         track_cursor: bool = False,
         config_path: Path | None = None,
+        play_sfx: Callable[[str], None] | None = None,
     ) -> None:
         self.session = session
         self.web = web  # phone and tablet server (hark.web.server.WebServer), started with the socket
         self.wake = wake  # optional always-on WakeListener (hark.audio.wake.WakeListener)
         self.cfg = cfg
         self.config_path = config_path  # when set, `set` with save=true persists to this TOML file
+        self.play_sfx = play_sfx
         self.audio_in = audio_in
         self.factories = factories or {}
         self.wav_out = wav_out
@@ -436,6 +438,8 @@ class Daemon:
                     self.errors["microphone"] = str(exc)
                     raise RequestError(f"cannot open the microphone: {exc}") from exc
                 self._listening = True
+                if self.play_sfx is not None and not req.get("quiet"):
+                    self.play_sfx("wake")
                 self._pump = asyncio.create_task(self._pump_audio())
             return {"ok": True}
         if cmd == "ptt_stop":
@@ -570,6 +574,9 @@ class Daemon:
                 "tts": self.cfg.tts.engine,
                 "voice": self.cfg.tts.kokoro_voice if self.cfg.tts.engine == "kokoro" else "",
             },
+            "audio": {
+                "sounds": self.cfg.audio.sounds,
+            },
             "session_id": s.session_id,
             "timing": s.last_timing,
             "confirm": s.pending_confirm,
@@ -602,6 +609,9 @@ class Daemon:
                 "threshold": self.cfg.wake.threshold,
                 "sensitivity": sensitivity_label(self.cfg.wake.threshold),
             },
+            "audio": {
+                "sounds": self.cfg.audio.sounds,
+            },
         }
 
     def _active_model(self, talker: str) -> str:
@@ -622,6 +632,14 @@ class Daemon:
         raise RequestError(f"{key} expects on or off")
 
     async def _set(self, key: Any, value: Any, *, save: bool = False) -> dict[str, Any]:
+        if key == "audio.sounds":
+            want = self._parse_bool(value, key)
+            self.cfg.audio.sounds = want
+            self._persist("audio", "sounds", want, save)
+            if want and self.play_sfx is not None:
+                self.play_sfx("heard")
+            await self.broadcast(self._settings_event())
+            return {"ok": True, "key": key, "value": "on" if want else "off"}
         if key == "wake.enabled":
             if self.wake is None:
                 raise RequestError("wake.enabled cannot be changed live (no wake listener)")
@@ -684,7 +702,7 @@ class Daemon:
             await self.broadcast(self._settings_event())
             return {"ok": True, "key": key, "value": label}
         if key not in SETTABLE:
-            all_keys = (*SETTABLE, "wake.enabled", "wake.call_mode", "wake.conversational", "wake.sensitivity")
+            all_keys = (*SETTABLE, "audio.sounds", "wake.enabled", "wake.call_mode", "wake.conversational", "wake.sensitivity")
             raise RequestError(f"cannot set {key}; settable: {', '.join(all_keys)}")
         if not isinstance(value, str) or not value:
             raise RequestError("set needs a string value")

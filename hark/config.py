@@ -60,6 +60,7 @@ class AudioConfig:
     source: str = ""  # PipeWire source name; empty means the default microphone
     sink: str = ""  # PipeWire sink name; empty means the default output, "null" plays nothing
     silence_ms: int = 300  # hands-free mode: silence that ends a turn
+    sounds: bool = True  # cute UI/voice sound effects (wake, heard, acting, confirm, done, sleep)
 
 
 @dataclass

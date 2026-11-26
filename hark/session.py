@@ -291,6 +291,7 @@ class Session:
         idle_timeout: float = 300.0,
         confirm_timeout: float = 20.0,
         progress_interval: float = 8.0,
+        play_sfx: Callable[[str], None] | None = None,
     ) -> None:
         self.stt = stt
         self.tts = tts
@@ -306,6 +307,7 @@ class Session:
         self.idle_timeout = idle_timeout
         self.confirm_timeout = confirm_timeout
         self.progress_interval = progress_interval
+        self.play_sfx = play_sfx
 
         self.state = State.IDLE
         self.closed = False  # set by close(): the daemon is shutting down
@@ -328,6 +330,10 @@ class Session:
         self._last_activity = monotonic()
         self._bg: set[asyncio.Task[Any]] = set()
         self._loops: list[asyncio.Task[None]] = []
+
+    def _sfx(self, name: str, quiet: bool = False) -> None:
+        if not quiet and self.play_sfx is not None:
+            self.play_sfx(name)
 
     # --- lifecycle ---------------------------------------------------------------
 
@@ -547,12 +553,14 @@ class Session:
                     speaker.say(note, record=False)
                 route = self._route(user_text)
                 timing["route_ms"] = ms()
+                if listen is not None and (route is None or route.tool not in ("stop", "goodbye")):
+                    self._sfx("heard", quiet)
                 if route is not None:
                     timing["path"] = "router"
                     await self._run_route(turn, route, speaker, timing, ms)
                 else:
                     timing["path"] = "talker"
-                    error = await self._run_brain(turn, user_text, speaker, timing, ms)
+                    error = await self._run_brain(turn, user_text, speaker, timing, ms, quiet=quiet)
                 timing["brain_done_ms"] = ms()
                 await speaker.finish()
                 timing["total_ms"] = ms()
@@ -570,6 +578,8 @@ class Session:
                 await speaker.cancel()
         if timing["total_ms"] is None:
             timing["total_ms"] = ms()
+        if error and not turn.cancelled:
+            self._sfx("error", quiet)
         return await self._finish_turn(turn, user_text, speaker, timing, error)
 
     def _route(self, text: str) -> Any:
@@ -602,7 +612,8 @@ class Session:
         speaker.say(clean_for_speech(say))
 
     async def _run_brain(
-        self, turn: _Turn, user_text: str, speaker: _Speaker, timing: dict[str, Any], ms: Callable[[], float]
+        self, turn: _Turn, user_text: str, speaker: _Speaker, timing: dict[str, Any], ms: Callable[[], float],
+        *, quiet: bool = False,
     ) -> str | None:
         ctx = TurnContext(session_id=self.session_id, history=list(self.history))
         if self.memory is not None:
@@ -628,6 +639,7 @@ class Session:
                         timing["first_text_ms"] = ms()
                     say(chunker.feed(ev.text))
                 elif isinstance(ev, ToolStart):
+                    self._sfx("acting", quiet)
                     await self._set_state(State.ACTING, turn)
                     await self._emit_turn(turn, {"event": "tool", "phase": "start", "name": ev.name, "args": ev.args})
                 elif isinstance(ev, ToolEnd):
@@ -721,6 +733,7 @@ class Session:
         if detail:
             event["detail"] = detail
         await self._emit_turn(turn, event)
+        self._sfx("confirm")
         self._ask_aloud(question)
         try:
             return await asyncio.wait_for(asyncio.shield(fut), self.confirm_timeout)
@@ -805,6 +818,7 @@ class Session:
                         self._last_progress = monotonic()
                         self._narrate(ev.text)
                 elif isinstance(ev, WorkerDone):
+                    self._sfx("done" if ev.ok else "error")
                     await self._emit(
                         {"event": "progress", "text": ev.summary, "job_id": ev.job_id, "done": True, "ok": ev.ok}
                     )

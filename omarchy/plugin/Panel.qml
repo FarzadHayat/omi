@@ -640,6 +640,33 @@ Panel {
                 Accessible.name: strings.t("settings.sensitivity") + ": " + text
               }
             }
+
+            // Cute sound effects toggle
+            RowLayout {
+              Layout.fillWidth: true
+              spacing: Style.space(8)
+
+              Text {
+                textFormat: Text.PlainText
+                text: strings.t("settings.sounds")
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+
+              Item { Layout.fillWidth: true }
+
+              Button {
+                objectName: "soundsButton"
+                text: omi.soundsEnabled ? strings.t("settings.on") : strings.t("settings.off")
+                bordered: true
+                foreground: omi.soundsEnabled ? Commons.Color.accent : root.dim
+                fontFamily: root.fontFamily
+                onClicked: omi.toggleSounds()
+                Accessible.role: Accessible.Button
+                Accessible.name: strings.t("settings.sounds") + ": " + text
+              }
+            }
           }
         }
       }

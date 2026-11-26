@@ -37,11 +37,47 @@ def test_encode_phrase_and_keywords_text(tmp_path):
 
 
 def test_wake_chime_pcm():
-    for fn in (wake.wake_chime_pcm, wake.sleep_chime_pcm):
-        pcm = fn(16000)
+    from hark.audio import sfx
+
+    for name in sfx.SOUNDS:
+        pcm = sfx.render(name, 16000)
         assert pcm.dtype == np.float32
-        assert 1200 <= len(pcm) <= 2000
-        assert float(np.max(np.abs(pcm))) <= 0.15
+        assert 800 <= len(pcm) <= 6000
+        assert 0.02 < float(np.max(np.abs(pcm))) <= 0.25
+    assert len(wake.wake_chime_pcm(16000)) > 0
+    assert len(wake.sleep_chime_pcm(16000)) > 0
+
+
+@pytest.mark.asyncio
+async def test_session_plays_heard_and_acting_sfx(tmp_path):
+    from hark.events import ToolEnd, ToolStart
+
+    played: list[str] = []
+    session = Session(
+        stt=FakeSTT("check my terminal"),
+        tts=FakeTTS(),
+        brain=FakeBrain(lambda _: [
+            (0.0, ToolStart("1", "terminal_read", {})),
+            (0.0, ToolEnd("1", "terminal_read", True, "ok")),
+            (0.0, TextDelta("Looks clean.")),
+            (0.0, TurnDone()),
+        ]),
+        registry=ToolRegistry(),
+        router=lambda _: None,
+        out=CaptureOut(),
+        state_dir=tmp_path,
+        play_sfx=played.append,
+    )
+    await session.start()
+    try:
+        res = await session.run_turn(pcm=np.ones(1600, dtype=np.float32))
+        assert res.reply == "Looks clean."
+        assert played == ["heard", "acting"]
+        played.clear()
+        await session.run_turn(pcm=np.ones(1600, dtype=np.float32), quiet=True)
+        assert played == []
+    finally:
+        await session.close()
 
 
 def test_is_goodbye_and_router_goodbye():

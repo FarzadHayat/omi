@@ -27,6 +27,7 @@ from typing import Any, Protocol
 import numpy as np
 import sherpa_onnx as so
 
+from hark.audio import sfx
 from hark.audio.base import AudioIn
 from hark.audio.pipewire import PipeWireIn, PipeWireOut
 from hark.audio.vad import EndpointDetector
@@ -250,25 +251,14 @@ def build_keywords_text(phrases: list[str] | tuple[str, ...], tokens_path: Path)
     return "\n".join(lines) + "\n"
 
 
-def _two_tone_chime(f1: float, f2: float, sample_rate: int = SAMPLE_RATE) -> np.ndarray:
-    dur1, dur2 = 0.045, 0.050
-    t1 = np.arange(int(sample_rate * dur1), dtype=np.float32) / sample_rate
-    t2 = np.arange(int(sample_rate * dur2), dtype=np.float32) / sample_rate
-    env1 = np.hanning(len(t1)).astype(np.float32)
-    env2 = np.hanning(len(t2)).astype(np.float32)
-    tone1 = 0.11 * env1 * np.sin(2.0 * np.pi * f1 * t1)
-    tone2 = 0.11 * env2 * np.sin(2.0 * np.pi * f2 * t2)
-    return np.concatenate([tone1, tone2]).astype(np.float32)
-
-
 def wake_chime_pcm(sample_rate: int = SAMPLE_RATE) -> np.ndarray:
-    """Gentle 95 ms rising two-tone chime (660 Hz -> 880 Hz) confirming Omi woke up."""
-    return _two_tone_chime(660.0, 880.0, sample_rate)
+    """Gentle bubbly rising bell chime confirming Omi woke up."""
+    return sfx.render("wake", sample_rate)
 
 
 def sleep_chime_pcm(sample_rate: int = SAMPLE_RATE) -> np.ndarray:
-    """Gentle 95 ms descending two-tone chime (660 Hz -> 440 Hz) when call mode ends."""
-    return _two_tone_chime(660.0, 440.0, sample_rate)
+    """Gentle descending bell chime when call mode drops back to standby."""
+    return sfx.render("sleep", sample_rate)
 
 
 class WakeDetector:
@@ -333,6 +323,7 @@ class WakeListener:
         vad_factory: Callable[[], Endpoint] | None = None,
         chime_fn: Callable[[], Awaitable[None]] | None = None,
         sleep_chime_fn: Callable[[], Awaitable[None]] | None = None,
+        play_sfx: Callable[[str], None] | None = None,
         post_speech_cooldown_s: float = POST_SPEECH_COOLDOWN_S,
     ) -> None:
         self.session = session
@@ -346,6 +337,7 @@ class WakeListener:
         self._vad_factory = vad_factory or (lambda: EndpointDetector(silence_ms=cfg.silence_ms))
         self._chime_fn = chime_fn
         self._sleep_chime_fn = sleep_chime_fn
+        self._play_sfx = play_sfx
         self._post_speech_cooldown_s = post_speech_cooldown_s
         self._vad: Endpoint | None = None
         self._audio: AudioIn | None = None
@@ -396,12 +388,20 @@ class WakeListener:
             self._pool.shutdown(wait=False, cancel_futures=True)
             self._pool = None
 
-    async def _play_tone(self, pcm_fn: Callable[[int], np.ndarray], hook: Callable[[], Awaitable[None]] | None) -> None:
+    async def _play_tone(
+        self,
+        cue: str,
+        pcm_fn: Callable[[int], np.ndarray],
+        hook: Callable[[], Awaitable[None]] | None,
+    ) -> None:
         if not self.cfg.chime or self.audio_sink == "null":
             return
         if hook is not None:
             with contextlib.suppress(Exception):
                 await hook()
+            return
+        if self._play_sfx is not None:
+            self._play_sfx(cue)
             return
         out = PipeWireOut(self.audio_sink)
         try:
@@ -418,7 +418,7 @@ class WakeListener:
         was = self.conversing
         self.conversing = False
         if chime:
-            asyncio.create_task(self._play_tone(sleep_chime_pcm, self._sleep_chime_fn))
+            asyncio.create_task(self._play_tone("sleep", sleep_chime_pcm, self._sleep_chime_fn))
         if was and self._broadcast is not None:
             await self._broadcast({"event": "wake", "conversing": False})
 
@@ -590,7 +590,7 @@ class WakeListener:
                         self.conversing = effective_call_mode(self.cfg) != "single"
                         if self._broadcast is not None:
                             await self._broadcast({"event": "wake", "phrase": hit, "conversing": self.conversing})
-                        asyncio.create_task(self._play_tone(wake_chime_pcm, self._chime_fn))
+                        asyncio.create_task(self._play_tone("wake", wake_chime_pcm, self._chime_fn))
                         audio_seen_since_reset = False
                         quiet_since = None
                         await start_capture(self.cfg.initial_timeout_s)
