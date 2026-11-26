@@ -28,8 +28,9 @@ def test_encode_phrase_and_keywords_text(tmp_path):
     )
     vocab = wake.load_vocab(tokens)
     assert wake.encode_phrase("hey omi", vocab, "hey_omi") == "▁HE Y ▁O M I @hey_omi"
-    text = wake.build_keywords_text(["hey omi", "computer"], tokens)
+    text = wake.build_keywords_text(["omi", "hey omi", "computer"], tokens)
     lines = text.splitlines()
+    assert "▁O M I @omi" in lines
     assert "▁HE Y ▁O M I @hey_omi" in lines
     assert "▁HE Y ▁OH ▁ME @hey_omi" in lines
     assert "▁COM P U T E R @computer" in lines

@@ -10,7 +10,7 @@ silence_ms = 300   # Hands-free silence window in milliseconds
 
 [wake]
 enabled = true
-phrases = ["hey omi", "okay omi"]
+phrases = ["omi", "hey omi", "okay omi"]
 threshold = 0.15         # Lower = more sensitive (0.10-0.25), higher = stricter
 score = 1.0              # Keyword boost score
 silence_ms = 750         # End-of-turn silence while speaking a command

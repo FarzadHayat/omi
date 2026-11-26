@@ -61,15 +61,16 @@ Item {
     shown: root.shown
     shownLayer: WlrLayer.Overlay
     shownKeyboardFocus: WlrKeyboardFocus.None
-    // Visual-only unless a Yes/No confirmation is waiting (then only the card catches clicks).
+    // Visual-only unless a Yes/No confirmation is waiting (then only the bubble catches clicks).
     mask: Region {
-      item: root.interactive ? companionGroup : null
+      item: root.interactive ? bubbleCard : null
     }
 
     readonly property real screenW: overlay.width > 0 ? overlay.width : 1920
     readonly property real screenH: overlay.height > 0 ? overlay.height : 1080
     readonly property real margin: Style.space(26)
     readonly property real mascotSize: Style.space(58)
+    readonly property real bubbleGap: Style.space(12)
 
     // Target point when Omi is pointing/moving on screen.
     readonly property bool hasTarget: root.mascot !== null
@@ -78,22 +79,22 @@ Item {
     readonly property real targetW: hasTarget && root.mascot.w > 0 ? Math.min(root.mascot.w, screenW - 24) : Style.space(44)
     readonly property real targetH: hasTarget && root.mascot.h > 0 ? Math.min(root.mascot.h, screenH - 24) : Style.space(44)
 
-    // Position the companion neatly next to the target (or bottom-right by default),
-    // automatically flipping sides so it never clips offscreen.
-    readonly property bool placeRightOfTarget: hasTarget && (targetX + targetW / 2 + companionGroup.width + Style.space(36) < screenW)
-    readonly property real desiredX: {
-      if (!hasTarget) return screenW - companionGroup.width - margin
+    // Position the mascot independently of the speech bubble so bubble resizing
+    // never nudges or jitters the mascot.
+    readonly property bool placeRightOfTarget: hasTarget && (targetX + targetW / 2 + mascotSize + Style.space(240) < screenW)
+    readonly property real desiredMascotX: {
+      if (!hasTarget) return screenW - margin - mascotSize
       if (placeRightOfTarget) return targetX + Math.min(targetW / 2, 160) + Style.space(22)
-      return Math.max(margin, targetX - Math.min(targetW / 2, 160) - companionGroup.width - Style.space(22))
+      return Math.max(margin, targetX - Math.min(targetW / 2, 160) - mascotSize - Style.space(22))
     }
-    readonly property real desiredY: {
-      if (!hasTarget) return screenH - companionGroup.height - margin
-      return Math.max(Style.space(48), Math.min(screenH - companionGroup.height - margin, targetY - companionGroup.height / 2))
+    readonly property real desiredMascotY: {
+      if (!hasTarget) return screenH - margin - mascotSize
+      return Math.max(Style.space(48), Math.min(screenH - mascotSize - margin, targetY - mascotSize / 2))
     }
 
     // Gaze vector: look directly at pointed target when pointing, otherwise follow the live mouse cursor!
-    readonly property real omiCenterX: companionGroup.x + mascotAvatar.x + mascotAvatar.width / 2
-    readonly property real omiCenterY: companionGroup.y + mascotAvatar.y + mascotAvatar.height / 2
+    readonly property real omiCenterX: mascotAvatar.x + mascotAvatar.width / 2
+    readonly property real omiCenterY: mascotAvatar.y + mascotAvatar.height / 2
     readonly property bool followCursor: !hasTarget && root.service && root.service.hasCursor
     readonly property real gazeTargetX: hasTarget ? targetX : (followCursor ? root.service.cursorX : omiCenterX)
     readonly property real gazeTargetY: hasTarget ? targetY : (followCursor ? root.service.cursorY : omiCenterY)
@@ -182,164 +183,157 @@ Item {
       }
     }
 
-    // ---- Omi + Speech Bubble group ----
-    Item {
-      id: companionGroup
-      objectName: "omiCompanion"
-      x: Math.max(overlay.margin, Math.min(overlay.screenW - width - overlay.margin, overlay.desiredX))
-      y: Math.max(Style.space(44), Math.min(overlay.screenH - height - overlay.margin, overlay.desiredY))
-      width: row.implicitWidth
-      height: Math.max(overlay.mascotSize, row.implicitHeight)
+    // ---- Speech Bubble Card (anchored beside Omi; grows upward/leftward without moving Omi) ----
+    BorderSurface {
+      id: bubbleCard
+      objectName: "omiBubble"
+      visible: root.bubbleHeadline !== ""
+      width: Math.min(Style.space(340), Math.max(Style.space(140), bubbleCol.implicitWidth + Style.space(26)))
+      height: bubbleCol.implicitHeight + Style.space(20)
+      x: overlay.placeRightOfTarget
+        ? Math.min(overlay.screenW - width - overlay.margin, mascotAvatar.x + mascotAvatar.width + overlay.bubbleGap)
+        : Math.max(overlay.margin, mascotAvatar.x - width - overlay.bubbleGap)
+      y: Math.max(Style.space(44), Math.min(overlay.screenH - height - overlay.margin, mascotAvatar.y + mascotAvatar.height - height))
       opacity: root.shown ? 1 : 0
       scale: root.shown ? 1 : 0.96
+      color: Util.alpha(Commons.Color.popups.background, 0.96)
+      borderSpec: Border.surfaceSpec(
+        "popups",
+        "border",
+        root.confirm ? Commons.Color.urgent : Commons.Color.popups.border,
+        Math.max(1, Style.space(2))
+      )
+      radius: Style.cornerRadius
+
+      Behavior on opacity { NumberAnimation { duration: Style.duration(180); easing.type: Easing.OutCubic } }
+      Behavior on scale { NumberAnimation { duration: Style.duration(180); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut } }
+
+      ColumnLayout {
+        id: bubbleCol
+        anchors.fill: parent
+        anchors.margins: Style.space(11)
+        spacing: Style.space(5)
+
+        // Header row: Omi name + state pill
+        RowLayout {
+          Layout.fillWidth: true
+          spacing: Style.space(8)
+
+          Text {
+            textFormat: Text.PlainText
+            text: strings.t("title")
+            color: Commons.Color.accent
+            font.family: Style.font.family
+            font.pixelSize: Style.font.caption
+            font.bold: true
+          }
+
+          Text {
+            textFormat: Text.PlainText
+            text: strings.t("state." + root.phase).toUpperCase()
+            color: root.confirm ? Commons.Color.urgent : Util.alpha(Commons.Color.popups.text, 0.6)
+            font.family: Style.font.family
+            font.pixelSize: Math.max(9, Style.font.caption - 1)
+            font.bold: true
+            font.letterSpacing: 0.9
+          }
+
+          Item { Layout.fillWidth: true }
+        }
+
+        // User utterance preview (subtle)
+        Text {
+          visible: root.lastUserText !== "" && !root.confirm && root.phase !== "listening"
+          Layout.fillWidth: true
+          textFormat: Text.PlainText
+          text: "“" + root.lastUserText + "”"
+          color: Util.alpha(Commons.Color.popups.text, 0.58)
+          font.family: Style.font.family
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.WordWrap
+          maximumLineCount: 2
+          elide: Text.ElideRight
+        }
+
+        // Main speech / action / confirm text
+        Text {
+          objectName: "omiBubbleText"
+          Layout.fillWidth: true
+          textFormat: Text.PlainText
+          text: root.bubbleHeadline
+          color: Commons.Color.popups.text
+          font.family: Style.font.family
+          font.pixelSize: Style.font.body
+          wrapMode: Text.WordWrap
+          maximumLineCount: 6
+          elide: Text.ElideRight
+        }
+
+        // Detail text on confirmation
+        Text {
+          visible: root.confirm !== null && root.confirm.detail !== ""
+          Layout.fillWidth: true
+          textFormat: Text.PlainText
+          text: root.confirm ? root.confirm.detail : ""
+          color: Util.alpha(Commons.Color.popups.text, 0.65)
+          font.family: Style.font.family
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.WrapAnywhere
+          maximumLineCount: 4
+          elide: Text.ElideRight
+        }
+
+        // Interactive Yes / No confirmation buttons right on the speech bubble
+        RowLayout {
+          visible: root.confirm !== null
+          Layout.fillWidth: true
+          spacing: Style.space(8)
+
+          Button {
+            objectName: "bubbleYesButton"
+            text: strings.t("confirm.yes")
+            bordered: true
+            foreground: Commons.Color.popups.text
+            fontFamily: Style.font.family
+            onClicked: root.service.answer(true)
+          }
+
+          Button {
+            objectName: "bubbleNoButton"
+            text: strings.t("confirm.no")
+            bordered: true
+            foreground: Commons.Color.popups.text
+            fontFamily: Style.font.family
+            onClicked: root.service.answer(false)
+          }
+
+          Item { Layout.fillWidth: true }
+        }
+      }
+    }
+
+    // ---- Animated Omi Mascot (fixed in bottom-right unless pointing at a target) ----
+    OmiMascot {
+      id: mascotAvatar
+      objectName: "companionMascot"
+      x: Math.max(overlay.margin, Math.min(overlay.screenW - width - overlay.margin, overlay.desiredMascotX))
+      y: Math.max(Style.space(44), Math.min(overlay.screenH - height - overlay.margin, overlay.desiredMascotY))
+      opacity: root.shown ? 1 : 0
+      scale: root.shown ? 1 : 0.96
+      size: overlay.mascotSize
+      phase: root.phase
+      showHalo: true
+      foreground: Commons.Color.popups.text
+      accent: Commons.Color.accent
+      urgent: Commons.Color.urgent
+      background: Commons.Color.background
+      lookX: (overlay.hasTarget || overlay.followCursor) ? (overlay.dx / overlay.dist) * overlay.gazeScale : 0
+      lookY: (overlay.hasTarget || overlay.followCursor) ? (overlay.dy / overlay.dist) * overlay.gazeScale : 0
 
       Behavior on x { NumberAnimation { duration: Style.duration(260); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut } }
       Behavior on y { NumberAnimation { duration: Style.duration(260); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut } }
       Behavior on opacity { NumberAnimation { duration: Style.duration(180); easing.type: Easing.OutCubic } }
       Behavior on scale { NumberAnimation { duration: Style.duration(180); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut } }
-
-      RowLayout {
-        id: row
-        spacing: Style.space(12)
-        layoutDirection: overlay.placeRightOfTarget ? Qt.RightToLeft : Qt.LeftToRight
-
-        // Speech bubble card
-        BorderSurface {
-          id: bubbleCard
-          objectName: "omiBubble"
-          visible: root.bubbleHeadline !== ""
-          Layout.maximumWidth: Style.space(340)
-          implicitWidth: Math.min(Style.space(340), Math.max(Style.space(140), bubbleCol.implicitWidth + Style.space(26)))
-          implicitHeight: bubbleCol.implicitHeight + Style.space(20)
-          color: Util.alpha(Commons.Color.popups.background, 0.96)
-          borderSpec: Border.surfaceSpec(
-            "popups",
-            "border",
-            root.confirm ? Commons.Color.urgent : Commons.Color.popups.border,
-            Math.max(1, Style.space(2))
-          )
-          radius: Style.cornerRadius
-
-          ColumnLayout {
-            id: bubbleCol
-            anchors.fill: parent
-            anchors.margins: Style.space(11)
-            spacing: Style.space(5)
-
-            // Header row: Omi name + state pill
-            RowLayout {
-              Layout.fillWidth: true
-              spacing: Style.space(8)
-
-              Text {
-                textFormat: Text.PlainText
-                text: strings.t("title")
-                color: Commons.Color.accent
-                font.family: Style.font.family
-                font.pixelSize: Style.font.caption
-                font.bold: true
-              }
-
-              Text {
-                textFormat: Text.PlainText
-                text: strings.t("state." + root.phase).toUpperCase()
-                color: root.confirm ? Commons.Color.urgent : Util.alpha(Commons.Color.popups.text, 0.6)
-                font.family: Style.font.family
-                font.pixelSize: Math.max(9, Style.font.caption - 1)
-                font.bold: true
-                font.letterSpacing: 0.9
-              }
-
-              Item { Layout.fillWidth: true }
-            }
-
-            // User utterance preview (subtle)
-            Text {
-              visible: root.lastUserText !== "" && !root.confirm && root.phase !== "listening"
-              Layout.fillWidth: true
-              textFormat: Text.PlainText
-              text: "“" + root.lastUserText + "”"
-              color: Util.alpha(Commons.Color.popups.text, 0.58)
-              font.family: Style.font.family
-              font.pixelSize: Style.font.caption
-              wrapMode: Text.WordWrap
-              maximumLineCount: 2
-              elide: Text.ElideRight
-            }
-
-            // Main speech / action / confirm text
-            Text {
-              objectName: "omiBubbleText"
-              Layout.fillWidth: true
-              textFormat: Text.PlainText
-              text: root.bubbleHeadline
-              color: Commons.Color.popups.text
-              font.family: Style.font.family
-              font.pixelSize: Style.font.body
-              wrapMode: Text.WordWrap
-              maximumLineCount: 6
-              elide: Text.ElideRight
-            }
-
-            // Detail text on confirmation
-            Text {
-              visible: root.confirm !== null && root.confirm.detail !== ""
-              Layout.fillWidth: true
-              textFormat: Text.PlainText
-              text: root.confirm ? root.confirm.detail : ""
-              color: Util.alpha(Commons.Color.popups.text, 0.65)
-              font.family: Style.font.family
-              font.pixelSize: Style.font.caption
-              wrapMode: Text.WrapAnywhere
-              maximumLineCount: 4
-              elide: Text.ElideRight
-            }
-
-            // Interactive Yes / No confirmation buttons right on the speech bubble
-            RowLayout {
-              visible: root.confirm !== null
-              Layout.fillWidth: true
-              spacing: Style.space(8)
-
-              Button {
-                objectName: "bubbleYesButton"
-                text: strings.t("confirm.yes")
-                bordered: true
-                foreground: Commons.Color.popups.text
-                fontFamily: Style.font.family
-                onClicked: root.service.answer(true)
-              }
-
-              Button {
-                objectName: "bubbleNoButton"
-                text: strings.t("confirm.no")
-                bordered: true
-                foreground: Commons.Color.popups.text
-                fontFamily: Style.font.family
-                onClicked: root.service.answer(false)
-              }
-
-              Item { Layout.fillWidth: true }
-            }
-          }
-        }
-
-        // Animated Omi mascot character (adapts live to active Omarchy theme)
-        OmiMascot {
-          id: mascotAvatar
-          objectName: "companionMascot"
-          size: overlay.mascotSize
-          phase: root.phase
-          showHalo: true
-          foreground: Commons.Color.popups.text
-          accent: Commons.Color.accent
-          urgent: Commons.Color.urgent
-          background: Commons.Color.background
-          lookX: (overlay.hasTarget || overlay.followCursor) ? (overlay.dx / overlay.dist) * overlay.gazeScale : 0
-          lookY: (overlay.hasTarget || overlay.followCursor) ? (overlay.dy / overlay.dist) * overlay.gazeScale : 0
-          Layout.alignment: Qt.AlignBottom
-        }
-      }
     }
   }
 }

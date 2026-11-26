@@ -164,7 +164,7 @@ class WebConfig:
 @dataclass
 class WakeConfig:
     enabled: bool = True
-    phrases: list[str] = field(default_factory=lambda: ["hey omi", "okay omi"])
+    phrases: list[str] = field(default_factory=lambda: ["omi", "hey omi", "okay omi"])
     model_dir: str = _model_path("kws-gigaspeech-3.3M")
     threshold: float = 0.15
     score: float = 1.0

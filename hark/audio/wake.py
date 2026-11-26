@@ -50,6 +50,7 @@ MODEL_FILES = (
 # Phonetic spelling helpers for Omi so varied accents and softer speech trigger reliably
 # while keeping false positives near zero (benchmarked 31/32 TP, 0/24 FP at thresh=0.15).
 _PHONETIC_ALIASES: dict[str, tuple[str, ...]] = {
+    "omi": ("omi", "omie", "omee", "ohmi", "omy"),
     "hey omi": ("hey omi", "hey oh me", "hey omy", "hey omie", "hey omee", "hey ohmi"),
     "okay omi": ("okay omi", "ok omi", "okay oh me", "okay omie"),
     "ok omi": ("ok omi", "okay omi", "okay oh me", "okay omie"),

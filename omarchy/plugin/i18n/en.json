@@ -9,7 +9,7 @@
   "state.acting": "Working",
   "state.confirming": "Waiting for your answer",
   "hint.talk": "Hold Super+Alt+V to talk",
-  "hint.wake": "Say \"Hey Omi\" or hold Super+Alt+V",
+  "hint.wake": "Say \"Omi\" or hold Super+Alt+V",
   "hint.offline": "Start it with: systemctl --user start omi",
   "wake.on": "Wake: On",
   "wake.off": "Wake: Off",
