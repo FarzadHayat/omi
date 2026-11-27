@@ -86,16 +86,22 @@ async def build(cfg: Config) -> Daemon:
         registry.register(tool)
     from omi.worker import SwitchableWorker, delegate_tool
 
-    # Always present, so the settings can turn the worker on, off or over to another
-    # provider while Omi runs.
-    worker = SwitchableWorker(brains.create_worker(cfg))
-    registry.register(delegate_tool(worker))
     notices: list[Any] = []  # set to the daemon's broadcast once it exists
 
     async def on_switch(active: str, reason: str) -> None:
         log.info("talker is now %s%s", active, f" ({reason})" if reason else "")
         for send in notices:
             await send({"event": "brain", "active": active, "reason": reason})
+
+    async def on_worker_switch(active: str, reason: str) -> None:
+        log.info("worker is now %s%s", active, f" ({reason})" if reason else "")
+        for send in notices:
+            await send({"event": "brain", "worker_active": active, "worker_reason": reason})
+
+    # Always present, so the settings can turn the worker on, off or over to another
+    # provider while Omi runs.
+    worker = SwitchableWorker(brains.create_worker_chain(cfg, on_worker_switch))
+    registry.register(delegate_tool(worker))
 
     def chain(c: Config) -> Any:
         return brains.create_chain(c, registry, on_switch)
@@ -199,7 +205,7 @@ async def build(cfg: Config) -> Daemon:
         return brain
 
     async def started_worker(c: Config) -> Any:
-        new = brains.create_worker(c)
+        new = brains.create_worker_chain(c, on_worker_switch)
         if new is not None:
             try:
                 await new.start()
@@ -225,6 +231,13 @@ async def build(cfg: Config) -> Daemon:
             pcfg = getattr(cfg.brain, provider)
             c = replace(cfg, brain=replace(cfg.brain, **{provider: replace(pcfg, worker_model=value)}))
         return await started_worker(c)
+
+    async def new_worker_fallbacks(value: str) -> Any:
+        from omi.brain.fallback import format_entries, parse_entries
+
+        return await started_worker(
+            replace(cfg, brain=replace(cfg.brain, worker_fallbacks=format_entries(parse_entries(value))))
+        )
 
     async def new_tts(value: str) -> Any:
         engine = await asyncio.to_thread(ttss.create, replace(cfg.tts, engine=value))
@@ -283,6 +296,7 @@ async def build(cfg: Config) -> Daemon:
             "brain.local_model": new_local_model,
             "brain.worker": new_worker,
             "brain.worker_model": new_worker_model,
+            "brain.worker_fallbacks": new_worker_fallbacks,
             "tts.engine": new_tts,
             "tts.voice": new_voice,
             "stt.engine": new_stt,

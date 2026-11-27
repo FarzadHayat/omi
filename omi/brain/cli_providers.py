@@ -558,6 +558,14 @@ class CliWorker:
         last = -self.progress_every_s
         texts: list[str] = []
         last_error: str | None = None
+        stderr_lines: list[str] = []
+
+        async def drain_stderr() -> None:
+            assert proc.stderr is not None
+            while raw_err := await proc.stderr.readline():
+                stderr_lines.append(raw_err.decode(errors="replace").strip())
+
+        err_task = asyncio.create_task(drain_stderr())
         try:
             assert proc.stdout is not None
             while raw := await proc.stdout.readline():
@@ -583,7 +591,12 @@ class CliWorker:
                 if ev.error:
                     last_error = ev.error
             await proc.wait()
+            await err_task
         finally:
+            if not err_task.done():
+                err_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await err_task
             self._proc = None
 
         if self._interrupted:
@@ -591,5 +604,7 @@ class CliWorker:
         speech = SpeechFilter()
         summary = (speech.feed("".join(texts)) + speech.flush()).strip()
         if last_error or proc.returncode != 0:
-            return WorkerDone(job_id, False, summary or last_error or "The job failed.")
+            detail = " ".join(stderr_lines[-5:])[-260:]
+            fallback_msg = f"{self.provider} exited ({proc.returncode}){': ' + detail if detail else ''}"
+            return WorkerDone(job_id, False, summary or last_error or fallback_msg)
         return WorkerDone(job_id, True, summary or "Done.")

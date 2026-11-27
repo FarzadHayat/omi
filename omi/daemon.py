@@ -51,6 +51,7 @@ SETTABLE = {
     "brain.local_model": "brain",
     "brain.worker": "worker",
     "brain.worker_model": "worker",
+    "brain.worker_fallbacks": "worker",
     "tts.engine": "tts",
     "tts.voice": "tts",
     "stt.engine": "stt",
@@ -655,6 +656,7 @@ class Daemon:
 
         installed = {p["name"] for p in available_providers(self.cfg) if p["installed"]}
         brain = self.session.brain
+        worker = self.session.worker
         info = brain_catalog(self.cfg, installed)
         info.update(worker_catalog(self.cfg, installed))
         info.update({
@@ -663,6 +665,9 @@ class Daemon:
             "fallbacks": list(self.cfg.brain.fallbacks),
             "active": getattr(brain, "active", self.cfg.brain.talker),
             "fallback_reason": getattr(brain, "fallback_reason", ""),
+            "worker_fallbacks": list(self.cfg.brain.worker_fallbacks),
+            "worker_active": getattr(worker, "active_entry", "") or info.get("worker", ""),
+            "worker_fallback_reason": getattr(worker, "fallback_reason", ""),
         })
         return info
 
@@ -770,7 +775,9 @@ class Daemon:
             all_keys = (*SETTABLE, "tts.speed", "audio.sounds", "wake.enabled",
                         "wake.call_mode", "wake.conversational", "wake.sensitivity")
             raise RequestError(f"cannot set {key}; settable: {', '.join(all_keys)}")
-        if not isinstance(value, str) or (not value and key not in ("brain.fallbacks", "brain.model", "brain.worker_model")):
+        if not isinstance(value, str) or (
+            not value and key not in ("brain.fallbacks", "brain.model", "brain.worker_model", "brain.worker_fallbacks")
+        ):
             raise RequestError("set needs a string value")
         factory = self.factories.get(key)
         if SETTABLE[key] == "worker" and not hasattr(self.session.worker, "swap"):
@@ -816,6 +823,11 @@ class Daemon:
             provider = resolve_provider(self.cfg.brain.worker, role="worker")
             getattr(self.cfg.brain, provider).worker_model = value
             self._persist(f"brain.{provider}", "worker_model", value, save)
+        elif key == "brain.worker_fallbacks":
+            from omi.brain.fallback import format_entries, parse_entries
+
+            self.cfg.brain.worker_fallbacks = format_entries(parse_entries(value))
+            self._persist("brain", "worker_fallbacks", self.cfg.brain.worker_fallbacks, save)
         elif key == "brain.local_model":
             self.cfg.brain.local.model = os.path.expanduser(value)
             self._persist("brain.local", "model", self.cfg.brain.local.model, save)

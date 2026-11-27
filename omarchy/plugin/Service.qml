@@ -97,6 +97,8 @@ Item {
       var next = Object.assign({}, brain)
       if (typeof msg.active === "string") next.active = msg.active
       if (typeof msg.reason === "string") next.fallback_reason = msg.reason
+      if (typeof msg.worker_active === "string") next.worker_active = msg.worker_active
+      if (typeof msg.worker_reason === "string") next.worker_fallback_reason = msg.worker_reason
       brain = next
     } else if (ev === "settings") {
       if (typeof msg.talker === "string") talker = msg.talker
@@ -259,6 +261,10 @@ Item {
 
   function setFallbacks(list) {
     return setSetting("brain.fallbacks", (list || []).join(","))
+  }
+
+  function setWorkerFallbacks(list) {
+    return setSetting("brain.worker_fallbacks", (list || []).join(","))
   }
 
   // Answers exactly the question on screen: the daemon refuses an id that is no

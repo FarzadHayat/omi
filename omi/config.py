@@ -148,6 +148,9 @@ class BrainConfig:
     # Backups, in order, for when the talker fails before answering (usage limit, expired
     # login, CLI missing): "provider" or "provider:model". Uninstalled ones are skipped.
     fallbacks: list[str] = field(default_factory=lambda: ["opencode", "local"])
+    # Backups, in order, for when the background worker fails before acting:
+    # "provider" or "provider:model". Uninstalled ones are skipped.
+    worker_fallbacks: list[str] = field(default_factory=lambda: ["codex", "opencode"])
     local: LocalLlmConfig = field(default_factory=LocalLlmConfig)
     claude: ClaudeConfig = field(default_factory=ClaudeConfig)
     opencode: CliProviderConfig = field(default_factory=CliProviderConfig)

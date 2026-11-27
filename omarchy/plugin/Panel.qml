@@ -77,7 +77,40 @@ Panel {
 
   readonly property var workerOptions: (omi.brain && omi.brain.worker_providers) || []
   readonly property string worker: (omi.brain && omi.brain.worker) || ""
+  readonly property string workerModel: (omi.brain && omi.brain.worker_model) || ""
   readonly property var workerModelOptions: (omi.brain && omi.brain.worker_models && omi.brain.worker_models[worker]) || []
+  readonly property var workerFallbackList: (omi.brain && omi.brain.worker_fallbacks) || []
+  property bool customWorkerBackup: false
+
+  readonly property var workerBackupChoices: {
+    var out = []
+    var list = workerOptions
+    for (var i = 0; i < list.length; i++) {
+      var v = list[i].value
+      if (v !== "" && v !== "off" && v !== worker && workerFallbackList.indexOf(v) < 0)
+        out.push({ value: v, label: list[i].label })
+    }
+    if (worker !== "" && worker !== "off") {
+      var wLabel = worker
+      for (var j = 0; j < list.length; j++) if (list[j].value === worker) wLabel = list[j].label
+      var models = workerModelOptions
+      for (var k = 0; k < models.length; k++) {
+        var m = models[k].value
+        if (!m || m === workerModel) continue
+        var entry = worker + ":" + m
+        if (workerFallbackList.indexOf(entry) < 0)
+          out.push({ value: entry, label: wLabel + " · " + models[k].label })
+      }
+    }
+    out.push({ value: "__custom__", label: strings.t("settings.custom") })
+    return out
+  }
+
+  readonly property string workerFallbackNotice: {
+    var b = omi.brain || {}
+    if (!b.worker_active || b.worker_active === worker || !b.worker_fallback_reason) return ""
+    return strings.t("settings.using_backup").arg(workerEntryLabel(b.worker_active))
+  }
 
   readonly property var fallbackList: (omi.brain && omi.brain.fallbacks) || []
 
@@ -110,6 +143,25 @@ Panel {
     var next = fallbackList.slice()
     next.splice(index, 1)
     omi.setFallbacks(next)
+  }
+
+  function workerEntryLabel(entry) {
+    var name = String(entry).split(":")[0]
+    var model = String(entry).indexOf(":") >= 0 ? String(entry).slice(name.length + 1) : ""
+    var list = workerOptions
+    var label = name
+    for (var i = 0; i < list.length; i++) if (list[i].value === name) label = list[i].label
+    if (model === "") return label
+    var models = (omi.brain && omi.brain.worker_models && omi.brain.worker_models[name]) || []
+    var mLabel = model
+    for (var j = 0; j < models.length; j++) if (models[j].value === model) mLabel = models[j].label
+    return label + " · " + mLabel
+  }
+
+  function removeWorkerFallback(index) {
+    var next = workerFallbackList.slice()
+    next.splice(index, 1)
+    omi.setWorkerFallbacks(next)
   }
 
   // Speech engines: "Parakeet v3 · on this PC", "Groq · cloud · needs GROQ_API_KEY".
@@ -657,6 +709,8 @@ Panel {
                   if (omi.notice === "") return
                   providerDropdown.value = providerDropdown.bound
                   modelDropdown.value = modelDropdown.bound
+                  workerDropdown.value = workerDropdown.bound
+                  workerModelDropdown.value = workerModelDropdown.bound
                 }
               }
 
@@ -805,6 +859,7 @@ Panel {
               }
 
               Dropdown {
+                id: workerDropdown
                 objectName: "workerDropdown"
                 visible: root.workerOptions.length > 0
                 Layout.fillWidth: true
@@ -815,11 +870,15 @@ Panel {
                 readonly property string bound: root.worker
                 value: bound
                 onBoundChanged: value = bound
-                onChanged: function(v) { if (v !== root.worker) omi.setSetting("brain.worker", v) }
+                onChanged: function(v) {
+                  root.customWorkerBackup = false
+                  if (v !== root.worker) omi.setSetting("brain.worker", v)
+                }
                 Accessible.name: strings.t("settings.worker")
               }
 
               Dropdown {
+                id: workerModelDropdown
                 objectName: "workerModelDropdown"
                 visible: root.worker !== "" && root.worker !== "off" && root.workerModelOptions.length > 0
                 Layout.fillWidth: true
@@ -827,11 +886,108 @@ Panel {
                 fontFamily: root.fontFamily
                 background: root.dropdownBackground
                 options: root.workerModelOptions
-                readonly property string bound: (omi.brain && omi.brain.worker_model) || ""
+                readonly property string bound: root.workerModel
                 value: bound
                 onBoundChanged: value = bound
                 onChanged: function(v) { if (v !== bound) omi.setSetting("brain.worker_model", v) }
                 Accessible.name: strings.t("settings.worker_model")
+              }
+
+              Text {
+                objectName: "workerFallbackNotice"
+                visible: text !== ""
+                Layout.fillWidth: true
+                textFormat: Text.PlainText
+                text: root.workerFallbackNotice
+                color: root.urgent
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
+              }
+
+              Text {
+                visible: root.worker !== "" && root.worker !== "off"
+                textFormat: Text.PlainText
+                text: strings.t("settings.backups")
+                color: Qt.darker(root.foreground, 1.4)
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+              }
+
+              Repeater {
+                model: root.worker !== "" && root.worker !== "off" ? root.workerFallbackList : []
+                delegate: RowLayout {
+                  required property string modelData
+                  required property int index
+                  Layout.fillWidth: true
+                  spacing: Style.space(6)
+
+                  Text {
+                    Layout.fillWidth: true
+                    textFormat: Text.PlainText
+                    text: (index + 1) + ". " + root.workerEntryLabel(modelData)
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                    elide: Text.ElideRight
+                  }
+
+                  Button {
+                    text: "\u{f0156}"
+                    bordered: true
+                    foreground: root.dim
+                    fontFamily: root.fontFamily
+                    onClicked: root.removeWorkerFallback(index)
+                    Accessible.role: Accessible.Button
+                    Accessible.name: strings.t("settings.remove_backup").arg(root.workerEntryLabel(modelData))
+                  }
+                }
+              }
+
+              Dropdown {
+                objectName: "addWorkerBackupDropdown"
+                visible: root.worker !== "" && root.worker !== "off" && root.workerBackupChoices.length > 0
+                Layout.fillWidth: true
+                showLabel: false
+                fontFamily: root.fontFamily
+                background: root.dropdownBackground
+                options: [{ value: "", label: strings.t("settings.add_backup") }].concat(root.workerBackupChoices)
+                value: ""
+                onChanged: function(v) {
+                  if (v === "__custom__") {
+                    root.customWorkerBackup = true
+                    Qt.callLater(function() { customWorkerBackupField.forceActiveFocus() })
+                  } else if (v !== "") {
+                    root.customWorkerBackup = false
+                    omi.setWorkerFallbacks(root.workerFallbackList.concat([v]))
+                  }
+                  value = ""
+                }
+                Accessible.name: strings.t("settings.add_backup")
+              }
+
+              TextField {
+                id: customWorkerBackupField
+                objectName: "customWorkerBackupField"
+                visible: root.customWorkerBackup && root.worker !== "" && root.worker !== "off"
+                Layout.fillWidth: true
+                placeholderText: strings.t("settings.custom_backup")
+                foreground: root.foreground
+                font.family: root.fontFamily
+                Accessible.name: strings.t("settings.custom_backup")
+                Keys.onPressed: function(event) {
+                  if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                    if (text.trim() !== "") omi.setWorkerFallbacks(root.workerFallbackList.concat([text.trim()]))
+                    root.customWorkerBackup = false
+                    text = ""
+                    event.accepted = true
+                  } else if (event.key === Qt.Key_Escape) {
+                    root.customWorkerBackup = false
+                    text = ""
+                    event.accepted = true
+                  }
+                }
               }
 
               PanelSeparator { Layout.fillWidth: true; foreground: root.foreground }

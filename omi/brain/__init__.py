@@ -75,6 +75,68 @@ def create_talker(cfg: Config, registry: ToolRegistry) -> Brain:
     raise ValueError(f"unknown talker: {cfg.brain.talker}")
 
 
+def with_worker_model(cfg: Config, provider: str, model: str = "") -> Config:
+    """cfg with `provider` as the worker, and its worker_model set when one is given."""
+    brain = replace(cfg.brain, worker=provider)
+    if model:
+        if provider == "claude":
+            brain = replace(brain, claude=replace(brain.claude, worker_model=model))
+        elif hasattr(brain, provider):
+            brain = replace(brain, **{provider: replace(getattr(brain, provider), worker_model=model)})
+        else:
+            raise ValueError(f"cannot set worker model for unknown worker {provider}")
+    return replace(cfg, brain=brain)
+
+
+def usable_worker_fallbacks(cfg: Config) -> list[tuple[str, str]]:
+    """The configured worker backups that are installed and differ from the primary worker."""
+    from omi.brain.cli_providers import CLI_PROVIDERS, available_providers, resolve_provider
+    from omi.brain.fallback import parse_entries
+
+    installed = {p["name"] for p in available_providers(cfg) if p["installed"]}
+    valid = installed & ({"claude"} | set(CLI_PROVIDERS))
+    primary = resolve_provider(cfg.brain.worker, role="worker")
+    if primary == "off":
+        return []
+    primary_model = (
+        cfg.brain.claude.worker_model
+        if primary == "claude"
+        else getattr(getattr(cfg.brain, primary, None), "worker_model", "")
+    )
+    out: list[tuple[str, str]] = []
+    for provider, model in parse_entries(cfg.brain.worker_fallbacks):
+        provider = resolve_provider(provider, role="worker")
+        if provider not in valid:
+            continue
+        if provider == primary and (not model or model == primary_model):
+            continue
+        if (provider, model) in out:
+            continue
+        out.append((provider, model))
+    return out
+
+
+def create_worker_chain(
+    cfg: Config, on_switch: Callable[[str, str], Awaitable[None]] | None = None
+) -> Any:
+    """The background worker, wrapped with its backups when any are usable."""
+    from omi.brain.cli_providers import resolve_provider
+
+    primary = resolve_provider(cfg.brain.worker, role="worker")
+    if primary == "off":
+        return None
+    backups = usable_worker_fallbacks(cfg)
+    if not backups:
+        return create_worker(cfg)
+    from omi.brain.fallback import FallbackWorker
+
+    return FallbackWorker(
+        [(primary, ""), *backups],
+        lambda p, m: create_worker(with_worker_model(cfg, p, m)),
+        on_switch=on_switch,
+    )
+
+
 def create_worker(cfg: Config) -> Worker | None:
     from omi.brain.cli_providers import CLI_PROVIDERS, CliWorker, resolve_provider
 

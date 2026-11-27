@@ -60,5 +60,6 @@
   "settings.provider": "Who answers",
   "settings.worker_section": "Background worker",
   "settings.worker": "Who does long jobs",
-  "settings.worker_model": "Worker model"
+  "settings.worker_model": "Worker model",
+  "settings.custom_backup": "provider:model, then Enter"
 }

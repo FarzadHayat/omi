@@ -296,6 +296,34 @@ async def test_worker_cannot_be_set_without_a_switchable_worker(daemon):
     assert "live" in (await call(daemon, {"cmd": "set", "key": "brain.worker", "value": "codex"}))[-1]["error"]
 
 
+async def test_set_worker_fallbacks_swaps_and_persists(sock_dir, tmp_path):
+    from omi.worker import SwitchableWorker
+
+    first = FakeWorker()
+    d = make_daemon(sock_dir, worker=SwitchableWorker(first))
+    d.config_path = tmp_path / "config.toml"
+    made = []
+
+    async def new_worker_fallbacks(value):
+        made.append(value)
+        return FakeWorker()
+
+    d.factories["brain.worker_fallbacks"] = new_worker_fallbacks
+    await d.start()
+    try:
+        res = (await call(d, {"cmd": "set", "key": "brain.worker_fallbacks", "value": "codex, claude:haiku", "save": True}))[-1]
+        assert res["ok"] and first.closed
+        assert d.cfg.brain.worker_fallbacks == ["codex", "claude:haiku"]
+        st = (await call(d, {"cmd": "status"}))[-1]
+        assert st["brain"]["worker_fallbacks"] == ["codex", "claude:haiku"]
+        assert 'worker_fallbacks = ["codex", "claude:haiku"]' in d.config_path.read_text()
+        assert (await call(d, {"cmd": "set", "key": "brain.worker_fallbacks", "value": ""}))[-1]["ok"]
+        assert d.cfg.brain.worker_fallbacks == []
+        assert made == ["codex, claude:haiku", ""]
+    finally:
+        await d.close()
+
+
 async def test_subscribe_fan_out(daemon):
     subs = [await Client.open(daemon) for _ in range(2)]
     for s in subs:

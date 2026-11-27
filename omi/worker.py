@@ -175,6 +175,14 @@ class SwitchableWorker:
     def active(self) -> bool:
         return self.current is not None
 
+    @property
+    def active_entry(self) -> str:
+        return getattr(self.current, "active", "") if self.current is not None else ""
+
+    @property
+    def fallback_reason(self) -> str:
+        return getattr(self.current, "fallback_reason", "") if self.current is not None else ""
+
     async def start(self) -> None:
         if self.current is not None:
             await self.current.start()
