@@ -19,10 +19,9 @@ A local-first voice assistant and animated on-screen companion for Omarchy & Hyp
 - **Persistent compacting memory**: Markdown facts + rolling session digests + SQLite FTS5 search, with optional read-only shared memory directory (e.g. an Obsidian/Syncthing folder).
 - **Private mobile/tablet web UI**: Optional local web PWA served on `127.0.0.1:47911` for private access via `tailscale serve`.
 
-## Screenshots
+## Screenshot
 
-<!-- Add a screenshot of Omi in the Omarchy bar and the floating companion pointing on screen before publishing -->
-_Screenshot coming soon._
+![Omi on Omarchy](docs/screenshot.png)
 
 ## Keybindings
 
@@ -97,6 +96,14 @@ omi uninstall
 ```
 
 Your models, memory files, config (`~/.config/omi/config.toml`), and automatic config backups (`~/.local/state/omi/backups/`) are left untouched so you do not lose data; delete `~/.local/share/omi`, `~/.config/omi`, and `~/.local/state/omi` if you want a full wipe.
+
+## More for Omarchy
+
+See everything else I've built for Omarchy, each with a one-line install, at **[omarchy.farzadhayat.dev](https://omarchy.farzadhayat.dev)**.
+
+## Support
+
+If this saves you time, please [sponsor me on GitHub](https://github.com/sponsors/FarzadHayat). It keeps these projects maintained and free.
 
 ## License
 
