@@ -58,10 +58,23 @@ ShellRoot {
   property var omi: widget.service
   property int step: 0
   property var phasesSeen: []
+  property bool spawnChecked: false
 
   Connections {
     target: shell.omi
     function onPhaseChanged() { shell.phasesSeen = shell.phasesSeen.concat([shell.omi.phase]) }
+  }
+
+  Connections {
+    target: widget.companion
+    function onRevealedChanged() {
+      if (widget.companion.revealed && !shell.spawnChecked) {
+        shell.spawnChecked = true
+        var m = shell.find(widget.companion, "companionMascot")
+        var ok = m !== null && m.x > 1700 && m.y > 900
+        shell.check("companion spawns in bottom right", ok, m ? [m.x, m.y] : null)
+      }
+    }
   }
 
   // The fake daemon plays its script as soon as the widget subscribes; each step

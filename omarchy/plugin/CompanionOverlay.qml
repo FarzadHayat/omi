@@ -29,6 +29,7 @@ Item {
   property bool lingering: false
   readonly property bool shown: activeNow || lingering
   readonly property bool interactive: confirm !== null
+  readonly property bool revealed: overlay.contentRevealed
 
   onActiveNowChanged: {
     if (activeNow) {
@@ -71,6 +72,27 @@ Item {
     readonly property real margin: Style.space(26)
     readonly property real mascotSize: Style.space(58)
     readonly property real bubbleGap: Style.space(12)
+
+    // Only glide between positions once the fullscreen window is revealed and settled,
+    // so Omi spawns straight in the bottom-right instead of flying across from the
+    // unconfigured window size on first appearance (or after moving monitors).
+    property bool animateMotion: false
+
+    onContentRevealedChanged: {
+      if (!contentRevealed) {
+        animateMotion = false
+        if (mascotXAnim.running) mascotXAnim.complete()
+        if (mascotYAnim.running) mascotYAnim.complete()
+        if (spotlightXAnim.running) spotlightXAnim.complete()
+        if (spotlightYAnim.running) spotlightYAnim.complete()
+        if (spotlightWAnim.running) spotlightWAnim.complete()
+        if (spotlightHAnim.running) spotlightHAnim.complete()
+      } else {
+        Qt.callLater(function() {
+          if (overlay.contentRevealed) overlay.animateMotion = true
+        })
+      }
+    }
 
     // Target point when Omi is pointing/moving on screen.
     readonly property bool hasTarget: root.mascot !== null
@@ -117,10 +139,25 @@ Item {
       border.width: Math.max(2, Style.space(2))
       border.color: Commons.Color.accent
 
-      Behavior on x { NumberAnimation { duration: Style.duration(220); easing.type: Easing.OutCubic } }
-      Behavior on y { NumberAnimation { duration: Style.duration(220); easing.type: Easing.OutCubic } }
-      Behavior on width { NumberAnimation { duration: Style.duration(220); easing.type: Easing.OutCubic } }
-      Behavior on height { NumberAnimation { duration: Style.duration(220); easing.type: Easing.OutCubic } }
+      property bool animateMove: false
+      onVisibleChanged: {
+        if (!visible) {
+          animateMove = false
+          if (spotlightXAnim.running) spotlightXAnim.complete()
+          if (spotlightYAnim.running) spotlightYAnim.complete()
+          if (spotlightWAnim.running) spotlightWAnim.complete()
+          if (spotlightHAnim.running) spotlightHAnim.complete()
+        } else {
+          Qt.callLater(function() {
+            if (spotlight.visible && overlay.contentRevealed) spotlight.animateMove = true
+          })
+        }
+      }
+
+      Behavior on x { enabled: overlay.animateMotion && spotlight.animateMove; NumberAnimation { id: spotlightXAnim; duration: Style.duration(220); easing.type: Easing.OutCubic } }
+      Behavior on y { enabled: overlay.animateMotion && spotlight.animateMove; NumberAnimation { id: spotlightYAnim; duration: Style.duration(220); easing.type: Easing.OutCubic } }
+      Behavior on width { enabled: overlay.animateMotion && spotlight.animateMove; NumberAnimation { id: spotlightWAnim; duration: Style.duration(220); easing.type: Easing.OutCubic } }
+      Behavior on height { enabled: overlay.animateMotion && spotlight.animateMove; NumberAnimation { id: spotlightHAnim; duration: Style.duration(220); easing.type: Easing.OutCubic } }
 
       SequentialAnimation on opacity {
         running: spotlight.visible && !Style.reduceMotion
@@ -194,8 +231,8 @@ Item {
         ? Math.min(overlay.screenW - width - overlay.margin, mascotAvatar.x + mascotAvatar.width + overlay.bubbleGap)
         : Math.max(overlay.margin, mascotAvatar.x - width - overlay.bubbleGap)
       y: Math.max(Style.space(44), Math.min(overlay.screenH - height - overlay.margin, mascotAvatar.y + mascotAvatar.height - height))
-      opacity: root.shown ? 1 : 0
-      scale: root.shown ? 1 : 0.96
+      opacity: overlay.contentRevealed ? 1 : 0
+      scale: overlay.contentRevealed ? 1 : 0.96
       color: Util.alpha(Commons.Color.popups.background, 0.96)
       borderSpec: Border.surfaceSpec(
         "popups",
@@ -318,8 +355,8 @@ Item {
       objectName: "companionMascot"
       x: Math.max(overlay.margin, Math.min(overlay.screenW - width - overlay.margin, overlay.desiredMascotX))
       y: Math.max(Style.space(44), Math.min(overlay.screenH - height - overlay.margin, overlay.desiredMascotY))
-      opacity: root.shown ? 1 : 0
-      scale: root.shown ? 1 : 0.96
+      opacity: overlay.contentRevealed ? 1 : 0
+      scale: overlay.contentRevealed ? 1 : 0.96
       size: overlay.mascotSize
       phase: root.phase
       showHalo: true
@@ -330,8 +367,8 @@ Item {
       lookX: (overlay.hasTarget || overlay.followCursor) ? (overlay.dx / overlay.dist) * overlay.gazeScale : 0
       lookY: (overlay.hasTarget || overlay.followCursor) ? (overlay.dy / overlay.dist) * overlay.gazeScale : 0
 
-      Behavior on x { NumberAnimation { duration: Style.duration(260); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut } }
-      Behavior on y { NumberAnimation { duration: Style.duration(260); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut } }
+      Behavior on x { enabled: overlay.animateMotion; NumberAnimation { id: mascotXAnim; duration: Style.duration(260); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut } }
+      Behavior on y { enabled: overlay.animateMotion; NumberAnimation { id: mascotYAnim; duration: Style.duration(260); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut } }
       Behavior on opacity { NumberAnimation { duration: Style.duration(180); easing.type: Easing.OutCubic } }
       Behavior on scale { NumberAnimation { duration: Style.duration(180); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut } }
     }
