@@ -476,13 +476,14 @@ async def t3_read(thread: str, messages: int = 5) -> ToolResult:
     return ToolResult(True, out.strip()[-3000:] or "Empty thread.", {"raw": out})
 
 
-async def t3_start(project: str, message: str, title: str = "") -> ToolResult:
+async def t3_start(message: str, project: str = "", title: str = "") -> ToolResult:
     t3 = _require_t3()
     if not t3:
         return ToolResult(False, "T3 Code CLI is not installed on this machine.")
-    if not project.strip() or not message.strip():
-        return ToolResult(False, "Provide both a project path or ID and a message.")
-    rc, out, err = await run(build_t3_start(t3, project.strip(), message.strip(), title.strip()), timeout=20.0)
+    if not message.strip():
+        return ToolResult(False, "Provide a message for the T3 Code thread.")
+    proj = project.strip() or str(Path.home() / ".t3/scratch")
+    rc, out, err = await run(build_t3_start(t3, proj, message.strip(), title.strip()), timeout=20.0)
     if rc != 0:
         msg = (err or out).strip().splitlines()
         return ToolResult(False, f"Could not start T3 Code thread: {msg[0] if msg else 'exit ' + str(rc)}")
@@ -595,8 +596,8 @@ def tools() -> list[Tool]:
              _schema({"project": s, "limit": i}), "read", t3_threads),
         Tool("t3_read", "Read recent messages and status of a T3 Code thread by ID.",
              _schema({"thread": s, "messages": i}, ["thread"]), "read", t3_read),
-        Tool("t3_start", "Start a new T3 Code thread in a project directory or ID with an initial prompt.",
-             _schema({"project": s, "message": s, "title": s}, ["project", "message"]), "reversible", t3_start),
+        Tool("t3_start", "Start a new T3 Code thread with a prompt (optional project name/path/ID; defaults to scratch).",
+             _schema({"project": s, "message": s, "title": s}, ["message"]), "reversible", t3_start),
         Tool("t3_send", "Send a follow-up message to an existing T3 Code thread.",
              _schema({"thread": s, "message": s}, ["thread", "message"]), "reversible", t3_send),
         Tool("t3_open", "Show T3 Code on screen. With `thread` (id or link) it goes straight to that thread; "

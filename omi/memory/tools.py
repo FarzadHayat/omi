@@ -21,14 +21,15 @@ def _name_for(fact: str) -> str:
 
 
 def memory_tools(memory: Memory) -> list[Tool]:
-    async def remember(fact: str) -> ToolResult:
+    async def remember(fact: str, kind: str = "user") -> ToolResult:
         fact = " ".join(fact.split())
         if not fact:
             return ToolResult(False, "I did not catch what to remember.")
         if looks_secret(fact):
             return ToolResult(False, REFUSED_SECRET)
+        fact_type = kind.strip().lower() if kind else "user"
         await asyncio.to_thread(
-            memory.save_fact, _name_for(fact), fact, description=fact[:120], type="user"
+            memory.save_fact, _name_for(fact), fact, description=fact[:120], type=fact_type
         )
         return ToolResult(True, "Got it.")
 
@@ -48,10 +49,17 @@ def memory_tools(memory: Memory) -> list[Tool]:
     return [
         Tool(
             "remember",
-            "Save a lasting fact about the user or their preferences so you know it next time.",
+            "Save a lasting fact, preference, or behavior correction (use kind='feedback' when corrected so you don't repeat a mistake).",
             {
                 "type": "object",
-                "properties": {"fact": {**_STR, "description": "One short self-contained sentence."}},
+                "properties": {
+                    "fact": {**_STR, "description": "One short self-contained sentence."},
+                    "kind": {
+                        "type": "string",
+                        "enum": ["user", "feedback", "project", "reference"],
+                        "description": "Use 'feedback' for corrections or rules about how Omi should behave; defaults to 'user'.",
+                    },
+                },
                 "required": ["fact"],
             },
             "reversible",

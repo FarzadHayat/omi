@@ -457,6 +457,7 @@ class WakeListener:
             capturing = False
             speech_seen = False
             capture_started = 0.0
+            speech_started: float | None = None
             active_timeout = self.cfg.initial_timeout_s
             cooldown_until = 0.0
             reopen_at: float | None = None
@@ -469,7 +470,7 @@ class WakeListener:
             barge_run = 0
 
             async def start_capture(timeout_s: float) -> None:
-                nonlocal capturing, speech_seen, capture_started, active_timeout, reopen_at, confirm_reopen_at
+                nonlocal capturing, speech_seen, capture_started, speech_started, active_timeout, reopen_at, confirm_reopen_at
                 reopen_at = None
                 confirm_reopen_at = None
                 await self.session.begin_utterance()
@@ -477,6 +478,7 @@ class WakeListener:
                 capturing = True
                 speech_seen = False
                 capture_started = monotonic()
+                speech_started = None
                 active_timeout = timeout_s
 
             try:
@@ -535,9 +537,12 @@ class WakeListener:
                         self.session.feed_audio(chunk)
                         await loop.run_in_executor(self._pool, self._vad.feed, chunk)
                         if self._vad.speaking:
+                            if not speech_seen:
+                                speech_started = now
                             speech_seen = True
                         elapsed = now - capture_started
-                        if self._vad.ended or elapsed >= self.cfg.max_utterance_s:
+                        speech_elapsed = (now - speech_started) if speech_started is not None else 0.0
+                        if self._vad.ended or (speech_seen and speech_elapsed >= self.cfg.max_utterance_s):
                             capturing = False
                             await loop.run_in_executor(self._pool, self._detector.reset)
                             if speech_seen:
@@ -547,7 +552,7 @@ class WakeListener:
                                 await self.session.cancel_utterance()
                                 await self._end_conversation(chime=self.conversing)
                                 cooldown_until = now + 0.3
-                        elif not speech_seen and elapsed >= active_timeout:
+                        elif not speech_seen and active_timeout > 0 and elapsed >= active_timeout:
                             capturing = False
                             await self.session.cancel_utterance()
                             await self._end_conversation(chime=self.conversing)
@@ -608,6 +613,8 @@ class WakeListener:
                                 self.session.feed_audio(past)
                                 await loop.run_in_executor(self._pool, self._vad.feed, past)
                             speech_seen = bool(buffered)
+                            if speech_seen:
+                                speech_started = monotonic()
                         continue
 
                     # Active phone-call follow-up: reopen mic automatically once reply audio settles.

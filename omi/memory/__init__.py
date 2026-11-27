@@ -9,17 +9,20 @@ from pathlib import Path
 from omi.config import MemoryConfig
 from omi.memory.base import Hit, Memory
 from omi.memory.index import Index
-from omi.memory.store import FACT_TYPES, Fact, Store, looks_secret, redact
+from omi.memory.store import FACT_TYPES, Fact, Store, looks_secret, redact, trim_tokens
 
 __all__ = ["Hit", "Memory", "FileMemory", "NullMemory", "create"]
 
 log = logging.getLogger("omi.memory")
+FEEDBACK_MAX_TOKENS = 250
 
 
-def _join_context(profile: str, carryover: str) -> str:
+def _join_context(profile: str, carryover: str, feedback: str = "") -> str:
     parts = []
     if profile:
         parts.append(f"About the user:\n{profile}")
+    if feedback:
+        parts.append(f"Learned corrections (always follow):\n{feedback}")
     if carryover:
         parts.append(f"Recent conversations:\n{carryover}")
     return "\n\n".join(parts)
@@ -53,6 +56,8 @@ class FileMemory:
         with self._lock:
             path = self._store.write_fact(name, body, description, type)
             self._index.upsert_file(path)
+            if type == "feedback":
+                self._refresh_context()
         return str(path)
 
     def forget(self, query: str) -> list[str]:
@@ -68,6 +73,8 @@ class FileMemory:
                     continue
                 self._index.remove_file(path)
                 removed.append(hit.name)
+            if removed:
+                self._refresh_context()
             return removed
 
     def log_turn(self, session_id: str, role: str, text: str) -> None:
@@ -143,8 +150,15 @@ class FileMemory:
             self._sync_thread.join(timeout=2.0)
             self._sync_thread = None
 
+    def _feedback_lines(self) -> str:
+        own = [f for f in self._index.facts(("feedback",)) if f.source == "own" and f.body.strip()]
+        if not own:
+            return ""
+        lines = [f"- {f.body.strip()}" for f in own[:12]]
+        return trim_tokens("\n".join(lines), FEEDBACK_MAX_TOKENS)
+
     def _refresh_context(self) -> None:
-        self._context = _join_context(self._store.profile(), self._store.carryover())
+        self._context = _join_context(self._store.profile(), self._store.carryover(), self._feedback_lines())
 
 
 class NullMemory:

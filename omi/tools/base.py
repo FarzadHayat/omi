@@ -27,6 +27,7 @@ class ToolResult:
     ok: bool
     text: str  # short, speakable summary of what happened
     data: Any = None
+    images: list[tuple[str, bytes]] = field(default_factory=list)  # (mime_type, raw bytes)
 
 
 # Asks the user to approve a destructive action. Gets a short spoken question,

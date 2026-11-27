@@ -90,12 +90,52 @@ def test_router_strips_omi_wake_words():
 def test_gui_command_builders(tmp_path):
     p = tmp_path / "screen.jpg"
     assert gui.build_capture_screen(p, 0.5) == ["grim", "-t", "jpeg", "-q", "82", "-s", "0.50", str(p)]
-    assert gui.build_movecursor(120, 340) == ["dispatch movecursor 120 340"]
+    assert gui.build_movecursor(120, 340) == [
+        "dispatch hl.dsp.cursor.move({ x = 120, y = 340 })",
+        "dispatch movecursor 120 340",
+    ]
     assert gui.build_ydotool_click("left", 1) == ["ydotool", "click", "0xC0"]
     assert gui.build_ydotool_click("right", 2) == ["ydotool", "click", "--repeat", "2", "--next-delay", "60", "0xC1"]
     assert gui.build_ydotool_scroll(-4) == ["ydotool", "mousemove", "--wheel", "--", "0", "-4"]
     with pytest.raises(ValueError):
         gui.build_ydotool_click("banana")
+
+
+@pytest.mark.asyncio
+async def test_capture_screen_returns_inline_jpeg_bytes(tmp_path, monkeypatch):
+    fake_jpeg = b"\xff\xd8\xff\xe0fake-jpeg-bytes\xff\xd9"
+    monkeypatch.setattr(gui, "logical_screen_size", lambda: (1920, 1080, 1.0))
+    monkeypatch.setattr(gui.tempfile, "gettempdir", lambda: str(tmp_path))
+
+    async def fake_run(argv, timeout=5.0, stdin=None):
+        Path(argv[-1]).write_bytes(fake_jpeg)
+        return 0, "", ""
+
+    monkeypatch.setattr(gui, "run", fake_run)
+    res = await gui.capture_screen(scale=0.5)
+    assert res.ok
+    assert res.data["path"] == str(tmp_path / "omi-vision" / "screen.jpg")
+    assert res.images == [("image/jpeg", fake_jpeg)]
+
+
+@pytest.mark.asyncio
+async def test_mouse_click_aborts_if_cursor_move_fails(monkeypatch):
+    clicked: list[list[str]] = []
+    monkeypatch.setattr(gui, "send_first_ok", lambda cmds: (False, "lua syntax error"))
+    monkeypatch.setattr(gui, "ydotool_available", lambda: True)
+
+    async def fake_notify(payload, socket_path=None):
+        return True
+
+    async def fake_run(argv, timeout=3.0, stdin=None):
+        clicked.append(argv)
+        return 0, "", ""
+
+    monkeypatch.setattr(gui, "notify_mascot", fake_notify)
+    monkeypatch.setattr(gui, "run", fake_run)
+    res = await gui.mouse_click(100, 200)
+    assert not res.ok and "Could not move cursor" in res.text
+    assert clicked == []
 
 
 def test_ui_action_safety_blocks_destructive_labels(monkeypatch):
@@ -204,3 +244,18 @@ async def test_t3_open_goes_to_a_thread_through_the_desktop_link(monkeypatch):
     res = await dev.t3_open(thread="t-9")
     assert res.ok and "Post Update" in res.text
     assert calls[-1] == ["gio", "open", "t3code://threads/e/t-9"]
+
+
+@pytest.mark.asyncio
+async def test_t3_start_defaults_to_scratch_when_project_omitted(monkeypatch):
+    calls: list[list[str]] = []
+    monkeypatch.setattr(dev, "find_t3_binary", lambda: "/fake/t3")
+
+    async def fake_run(argv, timeout=20.0, stdin=None):
+        calls.append(argv)
+        return 0, json.dumps({"threadId": "abc123", "title": "Handoff"}), ""
+
+    monkeypatch.setattr(dev, "run", fake_run)
+    res = await dev.t3_start(message="Please handle this task.")
+    assert res.ok and "Handoff" in res.text
+    assert calls[0][-2:] == [str(Path.home() / ".t3/scratch"), "Please handle this task."]

@@ -31,7 +31,7 @@ def result_text(content: Any) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        return " ".join(c.get("text", "") for c in content if isinstance(c, dict))
+        return " ".join(c["text"] for c in content if isinstance(c, dict) and c.get("text"))
     return ""
 
 

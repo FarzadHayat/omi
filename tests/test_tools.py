@@ -700,3 +700,32 @@ async def test_type_text_asks_with_the_text_and_refuses_long_terminal_input(monk
     assert not r.ok and asked == ["Type rm -rf ~ [Enter] into the terminal?"] and typed == []
     r = await reg.call("type_text", {"text": "x" * 400})
     assert not r.ok and "too long" in r.text and len(asked) == 1
+
+
+async def test_mcp_server_returns_image_content_for_capture_screen(tmp_path, monkeypatch):
+    import base64
+    from mcp import Client
+    from omi.brain.claude import result_text
+    from omi.tools import gui, mcp_server
+
+    fake_jpeg = b"\xff\xd8\xff\xe0screen-image\xff\xd9"
+    monkeypatch.setattr(gui, "logical_screen_size", lambda: (1920, 1080, 1.0))
+    monkeypatch.setattr(gui.tempfile, "gettempdir", lambda: str(tmp_path))
+
+    async def fake_run(argv, timeout=5.0, stdin=None):
+        Path(argv[-1]).write_bytes(fake_jpeg)
+        return 0, "", ""
+
+    monkeypatch.setattr(gui, "run", fake_run)
+    async with Client(mcp_server.build_server()) as client:
+        res = await client.call_tool("capture_screen", {})
+    assert not res.is_error
+    assert len(res.content) == 2
+    assert res.content[0].type == "text" and "Captured screen" in res.content[0].text
+    assert res.content[1].type == "image"
+    assert res.content[1].mime_type == "image/jpeg"
+    assert base64.b64decode(res.content[1].data) == fake_jpeg
+    assert result_text([
+        {"type": "text", "text": "Captured screen"},
+        {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "AA=="}},
+    ]) == "Captured screen"

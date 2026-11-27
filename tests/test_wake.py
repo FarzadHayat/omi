@@ -538,3 +538,52 @@ async def test_talking_over_omi_interrupts_it_and_runs_the_new_request(tmp_path)
 async def test_without_barge_in_omi_finishes_talking_first(tmp_path):
     events, brain = await _talk_over(tmp_path, barge_in=False)
     assert [t for t, _ in brain.turns] == ["tell me a story"]  # talking over it did nothing
+
+
+@pytest.mark.asyncio
+async def test_pre_speech_silence_respects_followup_timeout_over_max_utterance(tmp_path):
+    """Waiting silently before speaking must use followup_timeout_s (not max_utterance_s)."""
+    events: list[dict] = []
+
+    async def broadcast(ev: dict) -> None:
+        events.append(ev)
+
+    session = Session(
+        stt=FakeSTT("hello"),
+        tts=FakeTTS(),
+        brain=FakeBrain(lambda _: [(0.0, TextDelta("Hi there.")), (0.0, TurnDone())]),
+        registry=ToolRegistry(),
+        router=lambda _: None,
+        out=CaptureOut(),
+        emit=broadcast,
+        state_dir=tmp_path,
+    )
+    await session.start()
+    chunks = [np.zeros(512, dtype=np.float32) for _ in range(80)]
+    listener = wake.WakeListener(
+        session,
+        config.WakeConfig(
+            enabled=True,
+            chime=False,
+            conversational=True,
+            max_utterance_s=0.05,
+            followup_timeout_s=0.0,  # never dismiss on silence alone
+        ),
+        broadcast=broadcast,
+        audio_in_factory=lambda: _FakeStreamAudioIn(chunks),
+        detector=_ScriptedDetector(trigger_at=1),
+        vad_factory=_OneTurnThenSilentVAD,
+        post_speech_cooldown_s=0.01,
+    )
+    await listener.start()
+    try:
+        for _ in range(60):
+            if any(e.get("event") == "transcript" and e.get("role") == "assistant" for e in events):
+                break
+            await asyncio.sleep(0.02)
+        await asyncio.sleep(0.15)  # well past max_utterance_s (0.05s)
+        assert listener.conversing is True
+        assert not any(e.get("event") == "wake" and e.get("conversing") is False for e in events)
+    finally:
+        await listener.stop()
+        await session.close()

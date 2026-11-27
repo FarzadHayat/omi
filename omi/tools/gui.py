@@ -89,7 +89,7 @@ def build_capture_screen(path: Path, scale: float = 0.5) -> list[str]:
 
 
 def build_movecursor(x: int, y: int) -> list[str]:
-    return [f"dispatch movecursor {int(x)} {int(y)}"]
+    return [f"dispatch hl.dsp.cursor.move({{ x = {int(x)}, y = {int(y)} }})", f"dispatch movecursor {int(x)} {int(y)}"]
 
 
 def _ydotool_button_code(button: str) -> str:
@@ -171,10 +171,15 @@ async def capture_screen(scale: float = 0.5) -> ToolResult:
     rc, _, err = await run(build_capture_screen(path, scale=scale), timeout=5.0)
     if rc != 0:
         return ToolResult(False, f"Screen capture failed: {err.strip() or rc}")
+    try:
+        image_bytes = path.read_bytes()
+    except OSError as exc:
+        return ToolResult(False, f"Screen capture could not be read: {exc}")
     return ToolResult(
         True,
         f"Captured screen ({w}x{h} logical coords) to {path}.",
         {"path": str(path), "logical_width": w, "logical_height": h, "monitor_scale": mon_scale},
+        images=[("image/jpeg", image_bytes)],
     )
 
 
@@ -522,9 +527,11 @@ async def mouse_move(x: int, y: int) -> ToolResult:
 
 async def mouse_click(x: int, y: int, button: str = "left", clicks: int = 1) -> ToolResult:
     x, y = int(x), int(y)
-    send_first_ok(build_movecursor(x, y))
+    moved, move_err = send_first_ok(build_movecursor(x, y))
     await notify_mascot({"action": "point", "x": x, "y": y, "w": 24, "h": 24, "label": "", "duration": 3})
     if ydotool_available():
+        if not moved:
+            return ToolResult(False, f"Could not move cursor to {x}, {y}: {move_err or 'Hyprland refused'}.")
         argv = build_ydotool_click(button=button, clicks=clicks)
         rc, out, err = await run(argv, timeout=3.0)
         if rc == 0:
@@ -552,8 +559,10 @@ async def mouse_click(x: int, y: int, button: str = "left", clicks: int = 1) -> 
 
 async def mouse_scroll(x: int, y: int, dy: int = -3) -> ToolResult:
     x, y, dy = int(x), int(y), int(dy)
-    send_first_ok(build_movecursor(x, y))
+    moved, move_err = send_first_ok(build_movecursor(x, y))
     if ydotool_available():
+        if not moved:
+            return ToolResult(False, f"Could not move cursor to {x}, {y}: {move_err or 'Hyprland refused'}.")
         rc, out, err = await run(build_ydotool_scroll(dy), timeout=3.0)
         if rc == 0:
             return ToolResult(True, "Scrolled down." if dy < 0 else "Scrolled up.")
@@ -605,7 +614,7 @@ def tools() -> list[Tool]:
     return [
         Tool("screen_info", "Get logical screen size, cursor position, and active window bounds.",
              _schema(), "read", screen_info),
-        Tool("capture_screen", "Capture a fast JPEG screenshot and return its path and logical coordinates.",
+        Tool("capture_screen", "Capture a screenshot of the screen and return the image with its path and logical coordinates.",
              _schema({"scale": {"type": "number", "minimum": 0.25, "maximum": 1.0}}),
              "read", capture_screen),
         Tool("ui_inspect", "List visible interactive desktop UI elements with indices and screen coordinates (no screenshot needed).",

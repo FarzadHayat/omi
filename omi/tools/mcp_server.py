@@ -12,6 +12,7 @@ socket). No daemon means nobody can say yes, so the answer is no.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import time
 from dataclasses import replace
@@ -229,7 +230,13 @@ def build_server() -> Server:
         text = result.text
         if result.data is not None:
             text += "\n" + json.dumps(result.data, default=str)[:4000]
-        return types.CallToolResult(content=[types.TextContent(text=text)], is_error=not result.ok)
+        content: list[types.ContentBlock] = [types.TextContent(text=text)]
+        for mime_type, raw in result.images:
+            content.append(types.ImageContent(
+                data=base64.b64encode(raw).decode("ascii"),
+                mime_type=mime_type,
+            ))
+        return types.CallToolResult(content=content, is_error=not result.ok)
 
     return Server("omi", on_list_tools=on_list_tools, on_call_tool=on_call_tool)
 

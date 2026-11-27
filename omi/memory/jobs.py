@@ -22,7 +22,8 @@ MAX_BULLETS = 5
 OPS = ("ADD", "UPDATE", "NOOP")
 
 DIGEST_PROMPT = """Below is a conversation between a voice assistant and its user.
-Write 3 to 5 short bullet points that sum it up: what the user asked for, what was done, and
+Write 3 to 5 short bullet points that sum it up: what the user asked for, what was done,
+any corrections or mistakes the user pointed out about the assistant's behaviour, and
 anything left open. Start every line with "- ". No introduction, nothing else.
 
 Conversation:
@@ -33,7 +34,10 @@ EXTRACT_PROMPT = """You keep long-term memory about a user of a voice assistant.
 Read the session digest and decide what to store.
 
 Rules:
-- Keep only durable facts about the user, their preferences and their ongoing projects.
+- Keep durable facts about the user, their preferences, their ongoing projects, and any
+  corrections or mistakes they asked the assistant not to repeat.
+- Store behavioural corrections and lessons learned with "type": "feedback", stating what
+  went wrong and what to do instead next time.
 - Never store secrets, passwords, keys, tokens, health details or financial details.
 - Skip one-off task details (a single search, a timer, one question).
 - Prefer UPDATE over ADD: if an existing fact covers the same thing, UPDATE it using its exact name.

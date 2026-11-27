@@ -30,7 +30,7 @@ REFUSED_REPLY = "Okay, I left it alone."
 # by itself every turn, so the talker does not get it; these get shorter descriptions.
 LOCAL_SKIP = frozenset({"recall"})
 LOCAL_DESCRIPTIONS = {
-    "remember": "Save a lasting fact about the user.",
+    "remember": "Save a lasting fact, preference, or behavior correction (kind='feedback').",
     "forget": "Forget a saved fact.",
     "delegate": "Start a long multi-step job on the computer (coding, editing files, web research). Never for a question you can answer yourself.",
 }

@@ -610,3 +610,15 @@ def test_profile_written_at_startup_only_when_missing(mem, cfg):
     mem.save_fact("Tea", "Sam likes tea.")
     assert run(profile_if_missing(mem, llm)) == "Sam likes tea."
     assert run(profile_if_missing(mem, llm)) == "" and len(llm.prompts) == 1  # profile exists now
+
+
+def test_feedback_corrections_surface_immediately_in_context(mem):
+    tools = {t.name: t for t in memory_tools(mem)}
+    res = run(tools["remember"].fn(fact="Hand failing tasks to T3 Code instead of retrying.", kind="feedback"))
+    assert res.ok
+    assert "Learned corrections" in mem.context()
+    assert "Hand failing tasks to T3 Code" in mem.context()
+    # Forgetting the correction removes it from context immediately too
+    forgot = run(tools["forget"].fn(query="failing tasks T3 Code"))
+    assert forgot.ok
+    assert "Hand failing tasks to T3 Code" not in mem.context()
