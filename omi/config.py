@@ -105,19 +105,6 @@ class TtsConfig:
 
 
 @dataclass
-class DictationConfig:
-    # Hex + Superwhisper-style hold-to-dictate (Super+Alt+D):
-    # auto (app-aware + selection rewrite) | raw (instant verbatim) | clean | message | mail | note | code
-    mode: str = "auto"
-    pause_media: bool = True  # auto-pause MPRIS media while dictating and resume on release
-    paste_method: str = "auto"  # auto | paste | wtype
-    restore_clipboard: bool = True  # restore previous clipboard content after clipboard-paste insertion
-    use_selection: bool = True  # in auto mode, rewrite highlighted text when a transform command is spoken
-    replacements: dict[str, str] = field(default_factory=dict)  # custom word/phrase replacements
-    app_modes: dict[str, str] = field(default_factory=dict)  # window class/title pattern -> mode override
-
-
-@dataclass
 class LocalLlmConfig:
     # Any OpenAI-compatible chat-completions endpoint. When base_url is empty Omi
     # starts its own llama-server with `model` on `port`.
@@ -207,7 +194,6 @@ class Config:
     name: str = "Omi"  # what the assistant calls itself
     audio: AudioConfig = field(default_factory=AudioConfig)
     wake: WakeConfig = field(default_factory=WakeConfig)
-    dictation: DictationConfig = field(default_factory=DictationConfig)
     stt: SttConfig = field(default_factory=SttConfig)
     tts: TtsConfig = field(default_factory=TtsConfig)
     brain: BrainConfig = field(default_factory=BrainConfig)

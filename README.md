@@ -9,7 +9,6 @@ A local-first voice assistant and animated on-screen companion for Omarchy & Hyp
 ## Features
 
 - **Fast voice loop + smart wake word**: Always-on **"Hey Omi"** / **"Okay Omi"** wake word (`sherpa-onnx` 3.3M streaming keyword spotter + Silero VAD, ~1.7% CPU, toggleable live) with **Smart (`auto`)**, **Continuous**, and **Single-turn** call modes, plus soft procedural sound effects.
-- **Built-in Hex + Superwhisper-style dictation (`Super + Alt + D`)**: Hold to dictate directly into any focused window with clipboard-preserving paste, auto-pausing active media while you talk, custom word replacements, and smart modes (`Auto`, `Raw`, `Clean`, `Message`, `Mail`, `Note`, `Code`) — instant raw transcription in terminals/editors, formatted text in chat/mail/notes, and in-place selection rewrites when text is highlighted.
 - **Best local & cloud STT and TTS**:
   - **Local STT**: **NVIDIA Parakeet TDT 0.6B v3** (default — 10x faster than streaming, native punctuation & capitalization, 25 languages), **Nemotron Streaming 160ms**, or **Moonshine**.
   - **Cloud STT**: **Groq Whisper Large v3 Turbo** (`GROQ_API_KEY`), **Deepgram Nova-3** (`DEEPGRAM_API_KEY`), or **OpenAI `gpt-4o-mini-transcribe`** (`OPENAI_API_KEY`).
@@ -33,9 +32,8 @@ A local-first voice assistant and animated on-screen companion for Omarchy & Hyp
 | Shortcut | Action |
 | --- | --- |
 | `Super + Alt + V` (hold) | Push-to-talk with Omi (hold to speak, release to send) |
-| `Super + Alt + D` (hold) | Dictate at cursor (Hex / Superwhisper style; hold to dictate, release to paste) |
 | `Super + Alt + O` | Toggle the Omi panel in the Omarchy bar |
-| `Super + Alt + Escape` | Stop speaking / cancel current turn, dictation, or job |
+| `Super + Alt + Escape` | Stop speaking / cancel current turn or job |
 
 ## Requirements
 
@@ -89,7 +87,6 @@ omi engines                    # see local & cloud STT/TTS engines and readiness
 omi set brain.talker opencode  # switch provider live (claude|opencode|codex|agy|gemini|local|auto)
 omi set stt.engine parakeet    # switch STT live (parakeet|nemotron|moonshine|groq|deepgram|openai)
 omi set tts.engine kokoro      # switch TTS live (kokoro|piper|openai|elevenlabs)
-omi set dictation.mode auto    # switch dictation mode (auto|raw|clean|message|mail|note|code)
 omi set tts.voice bm_george    # switch active voice live
 omi set wake.enabled off       # pause/resume always-on wake word live
 omi say "what's running in my terminal?"

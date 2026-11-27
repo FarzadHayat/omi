@@ -78,9 +78,6 @@ def _print_human(msg: dict[str, Any]) -> None:
     elif ev == "progress":
         print(f"... {msg['text']}")
     elif ev is None and msg.get("done"):
-        if msg.get("text") and "inserted" in msg:
-            how = f" ({msg.get('mode')})" if msg.get("mode") else ""
-            print(f"dictated{how}: {msg['text']}")
         if msg.get("cancelled"):
             print("(cancelled)")
         if msg.get("timing"):
@@ -99,10 +96,6 @@ def _print_status(msg: dict[str, Any]) -> None:
         phrases = ", ".join(wake.get("phrases") or [])
         state = f"on ({phrases})" if wake.get("enabled") else ("starting" if wake.get("configured") and not msg.get("ready", True) else "off")
         print(f"wake: {state}")
-    dictation = msg.get("dictation") or {}
-    if dictation:
-        pm = "on" if dictation.get("pause_media") else "off"
-        print(f"dictation: {dictation.get('mode', 'auto')} (pause media: {pm})")
     print(f"session: {msg.get('session_id')}")
     if msg.get("confirm"):
         print(f"waiting for yes or no: {msg['confirm']['question']}")
@@ -122,12 +115,6 @@ def _build_request(args: argparse.Namespace) -> dict[str, Any]:
             req["out"] = str(Path(args.out).resolve())
     elif c == "ptt":
         req = {"cmd": f"ptt_{args.action}"}
-    elif c == "dictate":
-        req = {"cmd": f"dictate_{args.action}"}
-        if getattr(args, "mode", None):
-            req["mode"] = args.mode
-        if getattr(args, "dry_run", False):
-            req["dry_run"] = True
     elif c in ("yes", "no"):
         req = {"cmd": "confirm", "answer": c == "yes"}
     elif c == "set":
@@ -173,16 +160,11 @@ def _parser() -> argparse.ArgumentParser:
     wav.add_argument("--out", help="write the reply audio to this wav instead of playing it")
     ptt = sub.add_parser("ptt", help="push-to-talk")
     ptt.add_argument("action", choices=["start", "stop"])
-    dc = sub.add_parser("dictate", help="Hex/Superwhisper-style voice dictation into the focused window")
-    dc.add_argument("action", choices=["start", "stop", "toggle"])
-    dc.add_argument("--mode", choices=["auto", "raw", "clean", "message", "mail", "note", "code"],
-                    help="override dictation mode for this utterance")
-    dc.add_argument("--dry-run", action="store_true", help="transcribe and format without pasting")
     sub.add_parser("stop", help="stop speaking and cancel the running turn")
     sub.add_parser("status", help="show daemon state")
     sub.add_parser("yes", help="approve the pending confirmation")
     sub.add_parser("no", help="refuse the pending confirmation")
-    st = sub.add_parser("set", help="change a setting live (brain.*, stt.engine, tts.*, dictation.*, audio.sounds, wake.*)")
+    st = sub.add_parser("set", help="change a setting live (brain.*, stt.engine, tts.*, audio.sounds, wake.*)")
     st.add_argument("key")
     st.add_argument("value")
     st.add_argument("--save", action="store_true", help="also persist this setting to config.toml")

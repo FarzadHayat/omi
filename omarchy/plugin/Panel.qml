@@ -79,19 +79,6 @@ Panel {
     return strings.t("settings.smart")
   }
 
-  function dictationModeLabel(mode) {
-    var map = {
-      "auto": strings.t("settings.dictate_auto"),
-      "raw": strings.t("settings.dictate_raw"),
-      "clean": strings.t("settings.dictate_clean"),
-      "message": strings.t("settings.dictate_message"),
-      "mail": strings.t("settings.dictate_mail"),
-      "note": strings.t("settings.dictate_note"),
-      "code": strings.t("settings.dictate_code")
-    }
-    return map[mode] || strings.t("settings.dictate_auto")
-  }
-
   function engineLabel(id) {
     var map = {
       "parakeet": "Parakeet v3",
@@ -709,60 +696,6 @@ Panel {
                   onClicked: omi.cycleSpeed()
                   Accessible.role: Accessible.Button
                   Accessible.name: strings.t("settings.speed") + ": " + text
-                }
-              }
-
-              // Dictation mode (Hex / Superwhisper style: Super+Alt+D)
-              RowLayout {
-                Layout.fillWidth: true
-                spacing: Style.space(8)
-
-                Text {
-                  textFormat: Text.PlainText
-                  text: strings.t("settings.dictation")
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
-
-                Item { Layout.fillWidth: true }
-
-                Button {
-                  objectName: "dictationModeButton"
-                  text: root.dictationModeLabel(omi.dictationMode)
-                  bordered: true
-                  foreground: Commons.Color.accent
-                  fontFamily: root.fontFamily
-                  onClicked: omi.cycleDictationMode()
-                  Accessible.role: Accessible.Button
-                  Accessible.name: strings.t("settings.dictation") + ": " + text
-                }
-              }
-
-              // Pause media while dictating
-              RowLayout {
-                Layout.fillWidth: true
-                spacing: Style.space(8)
-
-                Text {
-                  textFormat: Text.PlainText
-                  text: strings.t("settings.pause_media")
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
-
-                Item { Layout.fillWidth: true }
-
-                Button {
-                  objectName: "pauseMediaButton"
-                  text: omi.dictationPauseMedia ? strings.t("settings.on") : strings.t("settings.off")
-                  bordered: true
-                  foreground: omi.dictationPauseMedia ? Commons.Color.accent : root.dim
-                  fontFamily: root.fontFamily
-                  onClicked: omi.togglePauseMedia()
-                  Accessible.role: Accessible.Button
-                  Accessible.name: strings.t("settings.pause_media") + ": " + text
                 }
               }
 

@@ -30,8 +30,6 @@ Item {
   property bool wakeConversational: true
   property string wakeSensitivity: "medium"
   property bool soundsEnabled: true
-  property string dictationMode: "auto"
-  property bool dictationPauseMedia: true
   property string talker: ""
   property string sttEngine: "parakeet"
   property string ttsEngine: "kokoro"
@@ -105,10 +103,6 @@ Item {
         if (typeof msg.engines.voice === "string" && msg.engines.voice !== "") voice = msg.engines.voice
         if (typeof msg.engines.speed === "number" && isFinite(msg.engines.speed)) ttsSpeed = msg.engines.speed
       }
-      if (msg.dictation) {
-        if (typeof msg.dictation.mode === "string") dictationMode = msg.dictation.mode
-        if (typeof msg.dictation.pause_media === "boolean") dictationPauseMedia = msg.dictation.pause_media
-      }
       if (msg.wake) {
         if (typeof msg.wake.enabled === "boolean") wakeEnabled = msg.wake.enabled
         if (typeof msg.wake.call_mode === "string") wakeCallMode = msg.wake.call_mode
@@ -132,10 +126,6 @@ Item {
       if (Array.isArray(msg.stt_engines)) sttEngines = msg.stt_engines
       if (Array.isArray(msg.tts_engines)) ttsEngines = msg.tts_engines
       if (Array.isArray(msg.voices)) voices = msg.voices
-      if (msg.dictation) {
-        if (typeof msg.dictation.mode === "string") dictationMode = msg.dictation.mode
-        if (typeof msg.dictation.pause_media === "boolean") dictationPauseMedia = msg.dictation.pause_media
-      }
       if (msg.wake) {
         if (typeof msg.wake.enabled === "boolean") wakeEnabled = msg.wake.enabled
         if (typeof msg.wake.call_mode === "string") wakeCallMode = msg.wake.call_mode
@@ -229,16 +219,6 @@ Item {
     var order = _readyNames(ttsEngines, ["kokoro", "piper"])
     var idx = order.indexOf(ttsEngine)
     return setSetting("tts.engine", order[(idx + 1) % order.length])
-  }
-
-  function cycleDictationMode() {
-    var order = ["auto", "raw", "clean", "message", "mail", "note", "code"]
-    var idx = order.indexOf(dictationMode)
-    return setSetting("dictation.mode", order[(idx + 1) % order.length])
-  }
-
-  function togglePauseMedia() {
-    return setSetting("dictation.pause_media", dictationPauseMedia ? "off" : "on")
   }
 
   function cycleSpeed() {

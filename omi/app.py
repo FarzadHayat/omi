@@ -214,7 +214,6 @@ async def build(cfg: Config) -> Daemon:
         track_cursor=bool(os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")),
         config_path=CONFIG_PATH,
         play_sfx=sfx.play,
-        dictation_llm=llm,
     )
     if cfg.web.enabled:
         from omi.web.server import WebServer
@@ -227,7 +226,7 @@ async def build(cfg: Config) -> Daemon:
         cfg.wake,
         audio_source=cfg.audio.source,
         audio_sink=cfg.audio.sink,
-        is_ptt_active=lambda: daemon._listening or daemon._dictating,
+        is_ptt_active=lambda: daemon._listening,
         broadcast=daemon.broadcast,
         play_sfx=sfx.play,
     )
