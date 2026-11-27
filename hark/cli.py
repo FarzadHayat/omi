@@ -164,7 +164,7 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("status", help="show daemon state")
     sub.add_parser("yes", help="approve the pending confirmation")
     sub.add_parser("no", help="refuse the pending confirmation")
-    st = sub.add_parser("set", help="change a setting live (brain.talker, brain.model, tts.voice, audio.sounds, wake.enabled, wake.call_mode, wake.sensitivity)")
+    st = sub.add_parser("set", help="change a setting live (brain.talker, brain.model, stt.engine, tts.engine, tts.voice, tts.speed, audio.sounds, wake.*)")
     st.add_argument("key")
     st.add_argument("value")
     st.add_argument("--save", action="store_true", help="also persist this setting to config.toml")

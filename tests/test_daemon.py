@@ -251,7 +251,8 @@ async def test_status_and_set(daemon):
     assert st["engines"] == {
         "stt": daemon.cfg.stt.engine,
         "tts": daemon.cfg.tts.engine,
-        "voice": daemon.cfg.tts.kokoro_voice if daemon.cfg.tts.engine == "kokoro" else "",
+        "voice": daemon.cfg.tts.kokoro_voice,
+        "speed": daemon.cfg.tts.speed,
     }
     assert st["session_id"] == daemon.session.session_id and st["timing"]["path"] == "talker"
     old = daemon.session.brain

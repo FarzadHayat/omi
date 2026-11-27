@@ -28,10 +28,14 @@ class PiperTTS:
         self._voice = PiperVoice.load(cfg.piper_model)
         self.sample_rate = int(self._voice.config.sample_rate)
         # length_scale below 1 speaks faster, so invert the speed factor.
-        base = self._voice.config.length_scale or 1.0
-        self._syn = SynthesisConfig(length_scale=base / max(cfg.speed, 0.1))
+        self._base_length_scale = self._voice.config.length_scale or 1.0
+        self.set_speed(cfg.speed)
         for _ in self.synth("Warm up."):
             pass
+
+    def set_speed(self, speed: float) -> None:
+        clamped = min(max(float(speed), 0.5), 2.0)
+        self._syn = SynthesisConfig(length_scale=self._base_length_scale / clamped)
 
     def synth(self, text: str) -> Iterator[np.ndarray]:
         clause = text.rstrip().endswith(_CLAUSE_MARKS)

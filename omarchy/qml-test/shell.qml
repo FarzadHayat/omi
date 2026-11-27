@@ -83,7 +83,7 @@ ShellRoot {
         shell.check("mascot point", h.mascot !== null && h.mascot.x === 420 && h.mascot.label === "Save button", h.mascot)
         shell.check("cursor tracked", h.hasCursor === true && h.cursorX === 640 && h.cursorY === 420, [h.hasCursor, h.cursorX, h.cursorY])
         shell.check("wake status", h.wakeEnabled === true, h.wakeEnabled)
-        shell.check("settings hydrated", h.talker === "claude" && h.voice === "af_heart" && h.wakeCallMode === "auto" && h.wakeSensitivity === "medium" && widget.installedProviders.length === 2, [h.talker, h.voice, h.wakeCallMode, h.wakeSensitivity, widget.installedProviders])
+        shell.check("settings hydrated", h.talker === "claude" && h.sttEngine === "nemotron" && h.ttsEngine === "kokoro" && h.voice === "af_heart" && h.ttsSpeed === 1.15 && h.wakeCallMode === "auto" && h.wakeSensitivity === "medium" && widget.installedProviders.length === 2, [h.talker, h.sttEngine, h.ttsEngine, h.voice, h.ttsSpeed, h.wakeCallMode])
         shell.check("companion shown", widget.companion.shown === true && widget.companion.interactive === true, widget.companion.shown)
         shell.check("accessible label", widget.accessibleLabel === "Omi: Waiting for your answer", widget.accessibleLabel)
         widget.open()

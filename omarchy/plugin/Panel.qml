@@ -77,6 +77,15 @@ Panel {
     return strings.t("settings.smart")
   }
 
+  function engineLabel(id) {
+    if (!id) return ""
+    return id.charAt(0).toUpperCase() + id.slice(1)
+  }
+
+  function speedLabel(speed) {
+    return (Math.round(speed * 100) / 100) + "x"
+  }
+
   function setRowCursor(id) {
     cursorActive = true
     rowIndex = Math.max(0, rows.indexOf(id))
@@ -506,165 +515,254 @@ Panel {
           }
         }
 
-        // ---- Collapsible Settings drawer (persists to config.toml) --------
+        // ---- Collapsible Settings drawer (scrollable, persists to config.toml) -
         BorderSurface {
           id: settingsCard
           objectName: "settingsCard"
           visible: root.settingsOpen && omi.connected
           Layout.fillWidth: true
-          implicitHeight: settingsCol.implicitHeight + Style.space(18)
+          Layout.preferredHeight: Math.min(settingsCol.implicitHeight + Style.space(18), Style.space(270))
+          implicitHeight: Layout.preferredHeight
           color: "transparent"
           borderSpec: Border.controlSpec("normal", root.dim, Commons.Color.popups.border)
           radius: Style.cornerRadius
 
-          ColumnLayout {
-            id: settingsCol
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
+          Flickable {
+            anchors.fill: parent
             anchors.margins: Style.space(9)
-            spacing: Style.space(8)
+            clip: true
+            contentWidth: width
+            contentHeight: settingsCol.implicitHeight
+            boundsBehavior: Flickable.StopAtBounds
+            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
-            // Provider picker
             ColumnLayout {
-              Layout.fillWidth: true
-              spacing: Style.space(4)
+              id: settingsCol
+              width: parent.width
+              spacing: Style.space(8)
 
-              Text {
-                textFormat: Text.PlainText
-                text: strings.t("settings.provider").toUpperCase()
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                font.bold: true
-                font.letterSpacing: 0.8
-              }
-
-              Flow {
+              // Provider picker
+              ColumnLayout {
                 Layout.fillWidth: true
-                spacing: Style.space(6)
+                spacing: Style.space(4)
 
-                Repeater {
-                  model: root.installedProviders
-                  delegate: Button {
-                    required property string modelData
-                    text: modelData
-                    bordered: true
-                    foreground: omi.talker === modelData ? Commons.Color.accent : root.foreground
-                    fontFamily: root.fontFamily
-                    onClicked: omi.setProvider(modelData)
-                    Accessible.role: Accessible.Button
-                    Accessible.name: strings.t("settings.provider") + ": " + modelData
+                Text {
+                  textFormat: Text.PlainText
+                  text: strings.t("settings.provider").toUpperCase()
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                  font.letterSpacing: 0.8
+                }
+
+                Flow {
+                  Layout.fillWidth: true
+                  spacing: Style.space(6)
+
+                  Repeater {
+                    model: root.installedProviders
+                    delegate: Button {
+                      required property string modelData
+                      text: modelData
+                      bordered: true
+                      foreground: omi.talker === modelData ? Commons.Color.accent : root.foreground
+                      fontFamily: root.fontFamily
+                      onClicked: omi.setProvider(modelData)
+                      Accessible.role: Accessible.Button
+                      Accessible.name: strings.t("settings.provider") + ": " + modelData
+                    }
                   }
                 }
               }
-            }
 
-            // Voice selector
-            RowLayout {
-              Layout.fillWidth: true
-              spacing: Style.space(8)
+              // STT engine selector
+              RowLayout {
+                Layout.fillWidth: true
+                spacing: Style.space(8)
 
-              Text {
-                textFormat: Text.PlainText
-                text: strings.t("settings.voice")
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
+                Text {
+                  textFormat: Text.PlainText
+                  text: strings.t("settings.stt")
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+
+                Item { Layout.fillWidth: true }
+
+                Button {
+                  objectName: "sttButton"
+                  text: root.engineLabel(omi.sttEngine)
+                  bordered: true
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  onClicked: omi.cycleStt()
+                  Accessible.role: Accessible.Button
+                  Accessible.name: strings.t("settings.stt") + ": " + text
+                }
               }
 
-              Item { Layout.fillWidth: true }
+              // TTS engine selector
+              RowLayout {
+                Layout.fillWidth: true
+                spacing: Style.space(8)
 
-              Button {
-                objectName: "voiceButton"
-                text: root.voiceLabel(omi.voice)
-                bordered: true
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                onClicked: omi.cycleVoice()
-                Accessible.role: Accessible.Button
-                Accessible.name: strings.t("settings.voice") + ": " + text
-              }
-            }
+                Text {
+                  textFormat: Text.PlainText
+                  text: strings.t("settings.tts")
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
 
-            // Continuous call mode toggle
-            RowLayout {
-              Layout.fillWidth: true
-              spacing: Style.space(8)
+                Item { Layout.fillWidth: true }
 
-              Text {
-                textFormat: Text.PlainText
-                text: strings.t("settings.call_mode")
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-
-              Item { Layout.fillWidth: true }
-
-              Button {
-                objectName: "callModeButton"
-                text: root.callModeLabel(omi.wakeCallMode)
-                bordered: true
-                foreground: omi.wakeCallMode !== "single" ? Commons.Color.accent : root.dim
-                fontFamily: root.fontFamily
-                onClicked: omi.cycleCallMode()
-                Accessible.role: Accessible.Button
-                Accessible.name: strings.t("settings.call_mode") + ": " + text
-              }
-            }
-
-            // Wake word sensitivity selector
-            RowLayout {
-              Layout.fillWidth: true
-              spacing: Style.space(8)
-
-              Text {
-                textFormat: Text.PlainText
-                text: strings.t("settings.sensitivity")
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
+                Button {
+                  objectName: "ttsButton"
+                  text: root.engineLabel(omi.ttsEngine)
+                  bordered: true
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  onClicked: omi.cycleTts()
+                  Accessible.role: Accessible.Button
+                  Accessible.name: strings.t("settings.tts") + ": " + text
+                }
               }
 
-              Item { Layout.fillWidth: true }
+              // Voice selector
+              RowLayout {
+                Layout.fillWidth: true
+                spacing: Style.space(8)
 
-              Button {
-                objectName: "sensitivityButton"
-                text: root.sensitivityLabel(omi.wakeSensitivity)
-                bordered: true
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                onClicked: omi.cycleSensitivity()
-                Accessible.role: Accessible.Button
-                Accessible.name: strings.t("settings.sensitivity") + ": " + text
+                Text {
+                  textFormat: Text.PlainText
+                  text: strings.t("settings.voice")
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+
+                Item { Layout.fillWidth: true }
+
+                Button {
+                  objectName: "voiceButton"
+                  text: root.voiceLabel(omi.voice)
+                  bordered: true
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  onClicked: omi.cycleVoice()
+                  Accessible.role: Accessible.Button
+                  Accessible.name: strings.t("settings.voice") + ": " + text
+                }
               }
-            }
 
-            // Cute sound effects toggle
-            RowLayout {
-              Layout.fillWidth: true
-              spacing: Style.space(8)
+              // Speech speed selector
+              RowLayout {
+                Layout.fillWidth: true
+                spacing: Style.space(8)
 
-              Text {
-                textFormat: Text.PlainText
-                text: strings.t("settings.sounds")
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
+                Text {
+                  textFormat: Text.PlainText
+                  text: strings.t("settings.speed")
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+
+                Item { Layout.fillWidth: true }
+
+                Button {
+                  objectName: "speedButton"
+                  text: root.speedLabel(omi.ttsSpeed)
+                  bordered: true
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  onClicked: omi.cycleSpeed()
+                  Accessible.role: Accessible.Button
+                  Accessible.name: strings.t("settings.speed") + ": " + text
+                }
               }
 
-              Item { Layout.fillWidth: true }
+              // Call mode toggle
+              RowLayout {
+                Layout.fillWidth: true
+                spacing: Style.space(8)
 
-              Button {
-                objectName: "soundsButton"
-                text: omi.soundsEnabled ? strings.t("settings.on") : strings.t("settings.off")
-                bordered: true
-                foreground: omi.soundsEnabled ? Commons.Color.accent : root.dim
-                fontFamily: root.fontFamily
-                onClicked: omi.toggleSounds()
-                Accessible.role: Accessible.Button
-                Accessible.name: strings.t("settings.sounds") + ": " + text
+                Text {
+                  textFormat: Text.PlainText
+                  text: strings.t("settings.call_mode")
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+
+                Item { Layout.fillWidth: true }
+
+                Button {
+                  objectName: "callModeButton"
+                  text: root.callModeLabel(omi.wakeCallMode)
+                  bordered: true
+                  foreground: omi.wakeCallMode !== "single" ? Commons.Color.accent : root.dim
+                  fontFamily: root.fontFamily
+                  onClicked: omi.cycleCallMode()
+                  Accessible.role: Accessible.Button
+                  Accessible.name: strings.t("settings.call_mode") + ": " + text
+                }
+              }
+
+              // Wake word sensitivity selector
+              RowLayout {
+                Layout.fillWidth: true
+                spacing: Style.space(8)
+
+                Text {
+                  textFormat: Text.PlainText
+                  text: strings.t("settings.sensitivity")
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+
+                Item { Layout.fillWidth: true }
+
+                Button {
+                  objectName: "sensitivityButton"
+                  text: root.sensitivityLabel(omi.wakeSensitivity)
+                  bordered: true
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  onClicked: omi.cycleSensitivity()
+                  Accessible.role: Accessible.Button
+                  Accessible.name: strings.t("settings.sensitivity") + ": " + text
+                }
+              }
+
+              // Cute sound effects toggle
+              RowLayout {
+                Layout.fillWidth: true
+                spacing: Style.space(8)
+
+                Text {
+                  textFormat: Text.PlainText
+                  text: strings.t("settings.sounds")
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+
+                Item { Layout.fillWidth: true }
+
+                Button {
+                  objectName: "soundsButton"
+                  text: omi.soundsEnabled ? strings.t("settings.on") : strings.t("settings.off")
+                  bordered: true
+                  foreground: omi.soundsEnabled ? Commons.Color.accent : root.dim
+                  fontFamily: root.fontFamily
+                  onClicked: omi.toggleSounds()
+                  Accessible.role: Accessible.Button
+                  Accessible.name: strings.t("settings.sounds") + ": " + text
+                }
               }
             }
           }

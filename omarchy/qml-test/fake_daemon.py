@@ -45,7 +45,7 @@ async def main(sock_path: str, log_path: str) -> None:
                     send(writer, {
                         "ok": True, "state": "idle", "ready": True, "confirm": None,
                         "talker": "claude",
-                        "engines": {"stt": "nemotron", "tts": "kokoro", "voice": "af_heart"},
+                        "engines": {"stt": "nemotron", "tts": "kokoro", "voice": "af_heart", "speed": 1.15},
                         "providers": [
                             {"name": "claude", "installed": True, "model": "haiku"},
                             {"name": "opencode", "installed": True, "model": "(cli default)"},

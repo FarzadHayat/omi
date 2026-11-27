@@ -48,6 +48,9 @@ class KokoroTTS:
         self._voice = voice
         self._lang = _lang_for(voice)
 
+    def set_speed(self, speed: float) -> None:
+        self._speed = min(max(float(speed), 0.5), 2.0)
+
     def synth(self, text: str) -> Iterator[np.ndarray]:
         # create_stream is async; drive it from a private loop so synth stays a plain
         # blocking generator that is safe to run in any worker thread.

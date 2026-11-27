@@ -280,9 +280,15 @@ async def test_daemon_settings_persist_and_broadcast(tmp_path):
         rep2 = json.loads(await asyncio.wait_for(r.readline(), 2.0))
         assert rep2 == {"ok": True, "key": "wake.conversational", "value": "off"}
 
+        w.write(b'{"cmd":"set","key":"tts.speed","value":"1.15","save":true}\n')
+        await w.drain()
+        rep3 = json.loads(await asyncio.wait_for(r.readline(), 2.0))
+        assert rep3 == {"ok": True, "key": "tts.speed", "value": "1.15"}
+
         saved = config.load(cfg_path)
         assert saved.wake.threshold == pytest.approx(0.10)
         assert saved.wake.conversational is False
+        assert saved.tts.speed == pytest.approx(1.15)
         w.close()
         sub_w.close()
     finally:

@@ -32,6 +32,9 @@ Item {
   property string wakeSensitivity: "medium"
   property bool soundsEnabled: true
   property string talker: ""
+  property string sttEngine: "nemotron"
+  property string ttsEngine: "kokoro"
+  property real ttsSpeed: 1.0
   property string voice: "af_heart"
   property var providers: []
   property var voices: ["af_heart", "af_bella", "am_adam", "bf_emma", "bm_george"]
@@ -90,6 +93,12 @@ Item {
     } else if (ev === "settings") {
       if (typeof msg.talker === "string") talker = msg.talker
       if (typeof msg.voice === "string" && msg.voice !== "") voice = msg.voice
+      if (msg.engines) {
+        if (typeof msg.engines.stt === "string" && msg.engines.stt !== "") sttEngine = msg.engines.stt
+        if (typeof msg.engines.tts === "string" && msg.engines.tts !== "") ttsEngine = msg.engines.tts
+        if (typeof msg.engines.voice === "string" && msg.engines.voice !== "") voice = msg.engines.voice
+        if (typeof msg.engines.speed === "number" && isFinite(msg.engines.speed)) ttsSpeed = msg.engines.speed
+      }
       if (msg.wake) {
         if (typeof msg.wake.enabled === "boolean") wakeEnabled = msg.wake.enabled
         if (typeof msg.wake.call_mode === "string") wakeCallMode = msg.wake.call_mode
@@ -103,7 +112,12 @@ Item {
       phase = Model.knownState(msg.state)
       confirm = Model.confirmOf(msg.confirm)
       if (typeof msg.talker === "string") talker = msg.talker
-      if (msg.engines && typeof msg.engines.voice === "string" && msg.engines.voice !== "") voice = msg.engines.voice
+      if (msg.engines) {
+        if (typeof msg.engines.stt === "string" && msg.engines.stt !== "") sttEngine = msg.engines.stt
+        if (typeof msg.engines.tts === "string" && msg.engines.tts !== "") ttsEngine = msg.engines.tts
+        if (typeof msg.engines.voice === "string" && msg.engines.voice !== "") voice = msg.engines.voice
+        if (typeof msg.engines.speed === "number" && isFinite(msg.engines.speed)) ttsSpeed = msg.engines.speed
+      }
       if (Array.isArray(msg.providers)) providers = msg.providers
       if (Array.isArray(msg.voices) && msg.voices.length > 0) voices = msg.voices
       if (msg.wake) {
@@ -178,6 +192,23 @@ Item {
     if (!voices || voices.length === 0) return false
     var idx = voices.indexOf(voice)
     return setSetting("tts.voice", voices[(idx + 1) % voices.length])
+  }
+
+  function cycleStt() {
+    return setSetting("stt.engine", sttEngine === "nemotron" ? "moonshine" : "nemotron")
+  }
+
+  function cycleTts() {
+    return setSetting("tts.engine", ttsEngine === "kokoro" ? "piper" : "kokoro")
+  }
+
+  function cycleSpeed() {
+    var steps = [0.9, 1.0, 1.15, 1.3]
+    var next = steps[0]
+    for (var i = 0; i < steps.length; i++) {
+      if (ttsSpeed < steps[i] - 0.02) { next = steps[i]; break }
+    }
+    return setSetting("tts.speed", String(next))
   }
 
   function setProvider(name) {

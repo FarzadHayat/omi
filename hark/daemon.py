@@ -572,7 +572,8 @@ class Daemon:
             "engines": {
                 "stt": self.cfg.stt.engine,
                 "tts": self.cfg.tts.engine,
-                "voice": self.cfg.tts.kokoro_voice if self.cfg.tts.engine == "kokoro" else "",
+                "voice": self.cfg.tts.kokoro_voice,
+                "speed": self.cfg.tts.speed,
             },
             "audio": {
                 "sounds": self.cfg.audio.sounds,
@@ -601,7 +602,13 @@ class Daemon:
             "event": "settings",
             "talker": self.cfg.brain.talker,
             "talker_model": self._active_model(self.cfg.brain.talker),
-            "voice": self.cfg.tts.kokoro_voice if self.cfg.tts.engine == "kokoro" else "",
+            "voice": self.cfg.tts.kokoro_voice,
+            "engines": {
+                "stt": self.cfg.stt.engine,
+                "tts": self.cfg.tts.engine,
+                "voice": self.cfg.tts.kokoro_voice,
+                "speed": self.cfg.tts.speed,
+            },
             "wake": {
                 "enabled": bool(self.cfg.wake.enabled and self.wake is not None and self.wake.active),
                 "call_mode": mode,
@@ -632,6 +639,19 @@ class Daemon:
         raise RequestError(f"{key} expects on or off")
 
     async def _set(self, key: Any, value: Any, *, save: bool = False) -> dict[str, Any]:
+        if key == "tts.speed":
+            try:
+                speed = round(float(value), 2)
+            except (TypeError, ValueError) as exc:
+                raise RequestError("tts.speed expects a number between 0.5 and 2.0") from exc
+            if not 0.5 <= speed <= 2.0:
+                raise RequestError("tts.speed must be between 0.5 and 2.0")
+            if hasattr(self.session.tts, "set_speed"):
+                self.session.tts.set_speed(speed)
+            self.cfg.tts.speed = speed
+            self._persist("tts", "speed", speed, save)
+            await self.broadcast(self._settings_event())
+            return {"ok": True, "key": key, "value": f"{speed:g}"}
         if key == "audio.sounds":
             want = self._parse_bool(value, key)
             self.cfg.audio.sounds = want
@@ -702,7 +722,7 @@ class Daemon:
             await self.broadcast(self._settings_event())
             return {"ok": True, "key": key, "value": label}
         if key not in SETTABLE:
-            all_keys = (*SETTABLE, "audio.sounds", "wake.enabled", "wake.call_mode", "wake.conversational", "wake.sensitivity")
+            all_keys = (*SETTABLE, "tts.speed", "audio.sounds", "wake.enabled", "wake.call_mode", "wake.conversational", "wake.sensitivity")
             raise RequestError(f"cannot set {key}; settable: {', '.join(all_keys)}")
         if not isinstance(value, str) or not value:
             raise RequestError("set needs a string value")
@@ -722,7 +742,9 @@ class Daemon:
             asyncio.ensure_future(_quietly(old.close()))
         if key == "tts.voice":
             self.cfg.tts.kokoro_voice = value
+            self.cfg.tts.engine = "kokoro"
             self._persist("tts", "kokoro_voice", value, save)
+            self._persist("tts", "engine", "kokoro", save)
         elif key == "brain.talker":
             resolved = getattr(new, "name", value) if value in ("auto", "openai") else value
             self.cfg.brain.talker = resolved
