@@ -51,7 +51,8 @@ class PipeWireOut:
         if exe is None:
             raise RuntimeError("pw-cat not found; install pipewire")
         cmd = [exe, "--playback", "--raw", "--format", "f32", "--rate", str(sample_rate),
-               "--channels", "1", "--latency", "20ms", "--media-role", "Assistant"]
+               "--channels", "1", "--latency", "20ms", "--media-role", "Assistant",
+               "-P", "application.name=Omi", "-P", "node.name=omi-playback"]
         if self.sink:
             cmd += ["--target", self.sink]
         cmd.append("-")
@@ -134,7 +135,8 @@ class PipeWireIn:
         if exe is None:
             raise RuntimeError("pw-record not found; install pipewire")
         cmd = [exe, "--raw", "--format", "f32", "--rate", str(IN_RATE), "--channels", "1",
-               "--latency", "32ms", "--media-role", "Communication"]
+               "--latency", "32ms", "--media-role", "Communication",
+               "-P", "application.name=Omi", "-P", "node.name=omi-capture"]
         if self.source.endswith(".monitor"):
             # pactl-style monitor name: capture the sink's output, which is what tests record.
             cmd += ["--target", self.source.removesuffix(".monitor"), "-P", "stream.capture.sink=true"]
