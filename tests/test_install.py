@@ -321,3 +321,18 @@ def test_bar_widget_runs_against_a_fake_daemon(tmp_path):
     assert {"cmd": "confirm", "answer": True, "id": "q-1"} in requests
     assert {"cmd": "say", "text": "open the browser"} in requests
     assert {"cmd": "stop"} in requests
+
+
+def test_an_updated_widget_restarts_the_bar(home):
+    paths = Paths(home)
+    install.install(home, OMI, activate=False)
+    unchanged = FakeRun(active=True)
+    install.install(home, OMI, run=unchanged)
+    assert not unchanged.ran("omarchy-restart-shell")
+
+    (paths.plugin / "Panel.qml").write_text("old version")
+    updated = FakeRun(active=True)
+    report = install.install(home, OMI, run=updated)
+    assert updated.ran("omarchy-restart-shell")
+    assert not updated.ran("omarchy-shell", "shell", "rescanPlugins")
+    assert "bar restarted to load the new widget" in report.changed

@@ -280,7 +280,9 @@ def plugin_enabled(paths: Paths, plugin_id: str = PLUGIN_ID) -> bool:
 def install(home: Path, binary: Path, *, activate: bool = True, run: Runner = run_command) -> Report:
     paths, report, backup = Paths(home), Report(), Backup(Paths(home))
     block, unit = bindings_block(binary), unit_text(binary)  # both checked before anything is written
-    if install_plugin(paths, backup):
+    had_plugin = paths.plugin.exists()
+    plugin_changed = install_plugin(paths, backup)
+    if plugin_changed:
         report.changed.append(f"bar widget copied to {paths.plugin}")
     unit_changed = install_unit(paths, unit, backup)
     if unit_changed:
@@ -294,7 +296,13 @@ def install(home: Path, binary: Path, *, activate: bool = True, run: Runner = ru
         _step(report, run, ["systemctl", "--user", "enable", "--now", UNIT])
         if was_active and unit_changed:
             _step(report, run, ["systemctl", "--user", "restart", UNIT])
-        _step(report, run, ["omarchy-shell", "shell", "rescanPlugins"])
+        if had_plugin and plugin_changed:
+            # The shell's own plugin reload keeps the old QML types cached (Omarchy 4.5), so
+            # an updated widget only shows after a full restart.
+            if _step(report, run, ["omarchy-restart-shell"]):
+                report.changed.append("bar restarted to load the new widget")
+        else:
+            _step(report, run, ["omarchy-shell", "shell", "rescanPlugins"])
         if not plugin_enabled(paths):
             if paths.shell_json.exists():
                 backup.save(paths.shell_json)
