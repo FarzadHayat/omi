@@ -89,13 +89,23 @@ async def build(cfg: Config) -> Daemon:
         from omi.worker import delegate_tool
 
         registry.register(delegate_tool(worker))
-    talker = brains.create_talker(cfg, registry)
+    notices: list[Any] = []  # set to the daemon's broadcast once it exists
+
+    async def on_switch(active: str, reason: str) -> None:
+        log.info("talker is now %s%s", active, f" ({reason})" if reason else "")
+        for send in notices:
+            await send({"event": "brain", "active": active, "reason": reason})
+
+    def chain(c: Config) -> Any:
+        return brains.create_chain(c, registry, on_switch)
+
+    talker = chain(cfg)
 
     async def llm(prompt: str) -> str:
         """One-shot completion for after-session jobs. A separate, tool-less brain so
         the job never adds to the live conversation or calls device tools; the local
         one reuses the running llama-server."""
-        brain = brains.create_talker(cfg, ToolRegistry())
+        brain = brains.create_chain(cfg, ToolRegistry())
         await brain.start()
         try:
             parts: list[str] = []
@@ -120,14 +130,25 @@ async def build(cfg: Config) -> Daemon:
         if after != before and not session.closed and session.state is State.IDLE and session.pending_confirm is None:
             await session.brain.start(after)
 
-    sfx = SfxPlayer(sink=cfg.audio.sink, enabled=lambda: cfg.audio.sounds)
+    # Echo cancellation: Omi plays into, and listens from, a cancelled pair so it never
+    # hears itself and the user can talk over it.
+    source, sink, echo = cfg.audio.source, cfg.audio.sink, None
+    if cfg.audio.echo_cancel and cfg.audio.sink != "null" and not cfg.audio.source.endswith(".monitor"):
+        from omi.audio import echo as echo_cancel
+
+        echo = await asyncio.to_thread(echo_cancel.ensure, cfg.audio.source, cfg.audio.sink)
+        if echo is not None:
+            source, sink = echo
+    if cfg.audio.barge_in and echo is None:
+        log.warning("barge-in is off: echo cancellation is not available, so Omi would hear itself")
+    sfx = SfxPlayer(sink=sink, enabled=lambda: cfg.audio.sounds)
     session = Session(
         stt=stt,
         tts=tts,
         brain=talker,
         registry=registry,
         router=route,
-        out=NullOut() if cfg.audio.sink == "null" else PipeWireOut(cfg.audio.sink),
+        out=NullOut() if cfg.audio.sink == "null" else PipeWireOut(sink),
         memory=memory,
         worker=worker,
         on_session_end=on_session_end,
@@ -136,23 +157,44 @@ async def build(cfg: Config) -> Daemon:
     registry.confirm = session.confirm
 
     async def new_talker(value: str) -> Any:
-        brain = brains.create_talker(replace(cfg, brain=replace(cfg.brain, talker=value)), registry)
+        brain = chain(replace(cfg, brain=replace(cfg.brain, talker=value)))
         await brain.start(memory.context())
         return brain
 
     async def new_model(value: str) -> Any:
         talker = getattr(session.brain, "name", cfg.brain.talker)
-        if talker == "claude":
-            bcfg = replace(cfg.brain, talker="claude", claude=replace(cfg.brain.claude, model=value))
-        elif talker in ("local", "openai"):
-            bcfg = replace(cfg.brain, talker="local", local=replace(cfg.brain.local, model_name=value))
-        elif hasattr(cfg.brain, talker):
-            pcfg = getattr(cfg.brain, talker)
-            bcfg = replace(cfg.brain, talker=talker, **{talker: replace(pcfg, model=value)})
-        else:
-            raise ValueError(f"cannot set model for unknown talker {talker}")
-        brain = brains.create_talker(replace(cfg, brain=bcfg), registry)
+        if value:
+            c = brains.with_model(cfg, talker, value)
+        elif talker in ("claude", "local") or not hasattr(cfg.brain, talker):
+            raise ValueError("pick a model")
+        else:  # back to the CLI's own default model
+            c = replace(cfg, brain=replace(cfg.brain, **{talker: replace(getattr(cfg.brain, talker), model="")}))
+        brain = chain(c)
         await brain.start(memory.context())
+        return brain
+
+    async def new_fallbacks(value: str) -> Any:
+        from omi.brain.fallback import format_entries, parse_entries
+
+        brain = chain(replace(cfg, brain=replace(cfg.brain, fallbacks=format_entries(parse_entries(value)))))
+        await brain.start(memory.context())
+        return brain
+
+    async def new_local_model(value: str) -> Any:
+        path = os.path.expanduser(value)
+        if not os.path.isfile(path):
+            raise ValueError(f"no model file at {path}")
+        # The running llama-server holds the old model on the same port: stop it first,
+        # or the new brain would adopt it.
+        await session.stop()
+        await session.brain.close()
+        brain = chain(replace(cfg, brain=replace(cfg.brain, local=replace(cfg.brain.local, model=path))))
+        try:
+            await brain.start(memory.context())
+        except Exception:
+            await brain.close()
+            await session.brain.start(memory.context())  # bring the old one back
+            raise
         return brain
 
     async def new_tts(value: str) -> Any:
@@ -186,7 +228,15 @@ async def build(cfg: Config) -> Daemon:
         "tts": lambda: asyncio.to_thread(_warm_tts, tts),
         "stt": lambda: asyncio.to_thread(_warm_stt, stt),
         "router": lambda: asyncio.to_thread(warm),
+        "models": lambda: load_models(),
     }
+
+    async def load_models() -> None:
+        from omi.brain.catalog import load_cli_models
+
+        await asyncio.to_thread(load_cli_models)
+        for send in notices:
+            await send(daemon._settings_event())
     if worker is not None:
         warmups["worker"] = worker.start
 
@@ -197,10 +247,12 @@ async def build(cfg: Config) -> Daemon:
     daemon = Daemon(
         session,
         cfg,
-        audio_in=PipeWireIn(cfg.audio.source),
+        audio_in=PipeWireIn(source),
         factories={
             "brain.talker": new_talker,
             "brain.model": new_model,
+            "brain.fallbacks": new_fallbacks,
+            "brain.local_model": new_local_model,
             "tts.engine": new_tts,
             "tts.voice": new_voice,
             "stt.engine": new_stt,
@@ -215,6 +267,7 @@ async def build(cfg: Config) -> Daemon:
         config_path=CONFIG_PATH,
         play_sfx=sfx.play,
     )
+    notices.append(daemon.broadcast)
     if cfg.web.enabled:
         from omi.web.server import WebServer
 
@@ -224,8 +277,9 @@ async def build(cfg: Config) -> Daemon:
     daemon.wake = WakeListener(
         session,
         cfg.wake,
-        audio_source=cfg.audio.source,
-        audio_sink=cfg.audio.sink,
+        audio_source=source,
+        audio_sink=sink,
+        barge_in=cfg.audio.barge_in and echo is not None,
         is_ptt_active=lambda: daemon._listening,
         broadcast=daemon.broadcast,
         play_sfx=sfx.play,

@@ -53,6 +53,11 @@ class AudioConfig:
     sink: str = ""  # PipeWire sink name; empty means the default output, "null" plays nothing
     silence_ms: int = 300  # hands-free mode: silence that ends a turn
     sounds: bool = True  # cute UI/voice sound effects (wake, heard, acting, confirm, done, sleep)
+    # Cancel Omi's own voice from the microphone (PipeWire WebRTC echo canceller), so the
+    # mic can stay open while Omi talks.
+    echo_cancel: bool = True
+    # Talk over Omi to interrupt it, like a phone call. Needs echo_cancel (or headphones).
+    barge_in: bool = True
 
 
 @dataclass
@@ -140,6 +145,9 @@ class BrainConfig:
     talker: str = "claude"
     # claude | opencode | codex | agy | gemini | off | auto
     worker: str = "claude"
+    # Backups, in order, for when the talker fails before answering (usage limit, expired
+    # login, CLI missing): "provider" or "provider:model". Uninstalled ones are skipped.
+    fallbacks: list[str] = field(default_factory=lambda: ["opencode", "local"])
     local: LocalLlmConfig = field(default_factory=LocalLlmConfig)
     claude: ClaudeConfig = field(default_factory=ClaudeConfig)
     opencode: CliProviderConfig = field(default_factory=CliProviderConfig)

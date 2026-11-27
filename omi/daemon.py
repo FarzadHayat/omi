@@ -47,6 +47,8 @@ Job = Callable[[], Awaitable[Any]]
 SETTABLE = {
     "brain.talker": "brain",
     "brain.model": "brain",
+    "brain.fallbacks": "brain",
+    "brain.local_model": "brain",
     "tts.engine": "tts",
     "tts.voice": "tts",
     "stt.engine": "stt",
@@ -571,6 +573,7 @@ class Daemon:
             "talker": talker,
             "talker_model": talker_model,
             "worker": self.cfg.brain.worker if s.worker is not None else "off",
+            "brain": self._brain_info(),
             "providers": [
                 {"name": p["name"], "installed": p["installed"], "model": p["model"]}
                 for p in available_providers(self.cfg)
@@ -621,6 +624,7 @@ class Daemon:
             "event": "settings",
             "talker": self.cfg.brain.talker,
             "talker_model": self._active_model(self.cfg.brain.talker),
+            "brain": self._brain_info(),
             "voice": self._active_voice(),
             "voices": self._voice_list(),
             "stt_engines": available_stt_engines(self.cfg.stt),
@@ -642,6 +646,22 @@ class Daemon:
                 "sounds": self.cfg.audio.sounds,
             },
         }
+
+    def _brain_info(self) -> dict[str, Any]:
+        from omi.brain.catalog import brain_catalog
+        from omi.brain.cli_providers import available_providers
+
+        installed = {p["name"] for p in available_providers(self.cfg) if p["installed"]}
+        brain = self.session.brain
+        info = brain_catalog(self.cfg, installed)
+        info.update({
+            "talker": self.cfg.brain.talker,
+            "model": self._active_model(self.cfg.brain.talker),
+            "fallbacks": list(self.cfg.brain.fallbacks),
+            "active": getattr(brain, "active", self.cfg.brain.talker),
+            "fallback_reason": getattr(brain, "fallback_reason", ""),
+        })
+        return info
 
     def _active_model(self, talker: str) -> str:
         if talker == "claude":
@@ -747,7 +767,7 @@ class Daemon:
             all_keys = (*SETTABLE, "tts.speed", "audio.sounds", "wake.enabled",
                         "wake.call_mode", "wake.conversational", "wake.sensitivity")
             raise RequestError(f"cannot set {key}; settable: {', '.join(all_keys)}")
-        if not isinstance(value, str) or not value:
+        if not isinstance(value, str) or (not value and key not in ("brain.fallbacks", "brain.model")):
             raise RequestError("set needs a string value")
         factory = self.factories.get(key)
         if factory is None:
@@ -779,6 +799,14 @@ class Daemon:
             resolved = getattr(new, "name", value) if value in ("auto", "openai") else value
             self.cfg.brain.talker = resolved
             self._persist("brain", "talker", resolved, save)
+        elif key == "brain.local_model":
+            self.cfg.brain.local.model = os.path.expanduser(value)
+            self._persist("brain.local", "model", self.cfg.brain.local.model, save)
+        elif key == "brain.fallbacks":
+            from omi.brain.fallback import format_entries, parse_entries
+
+            self.cfg.brain.fallbacks = format_entries(parse_entries(value))
+            self._persist("brain", "fallbacks", self.cfg.brain.fallbacks, save)
         elif key == "brain.model":
             talker = self.cfg.brain.talker
             if talker == "claude":

@@ -11,6 +11,7 @@ automatically listening again after every response until you say a farewell
 from __future__ import annotations
 
 import asyncio
+import collections
 import contextlib
 import logging
 import re
@@ -58,6 +59,11 @@ _PHONETIC_ALIASES: dict[str, tuple[str, ...]] = {
 }
 
 POST_SPEECH_COOLDOWN_S = 0.55
+# Talking over Omi: this many 32 ms chunks of steady speech (after the VAD's own onset)
+# interrupt it, about 0.3 s, long enough to skip a cough or an "mm-hm" click.
+BARGE_IN_CHUNKS = 6
+PREROLL_CHUNKS = 16  # audio kept while Omi talks, so the first words of an interruption count
+BARGE_IN_THRESHOLD = 0.6  # stricter than end-of-turn detection
 CONFIRM_REOPEN_DELAY_S = 1.2
 QUIET_RMS_THRESHOLD = 0.008
 QUIET_RESET_S = 2.5
@@ -325,6 +331,8 @@ class WakeListener:
         sleep_chime_fn: Callable[[], Awaitable[None]] | None = None,
         play_sfx: Callable[[str], None] | None = None,
         post_speech_cooldown_s: float = POST_SPEECH_COOLDOWN_S,
+        barge_in: bool = False,
+        barge_vad_factory: Callable[[], Endpoint] | None = None,
     ) -> None:
         self.session = session
         self.cfg = cfg
@@ -339,6 +347,12 @@ class WakeListener:
         self._sleep_chime_fn = sleep_chime_fn
         self._play_sfx = play_sfx
         self._post_speech_cooldown_s = post_speech_cooldown_s
+        # Barge-in: while Omi thinks or talks, listen for the user talking over it. Only
+        # safe when the mic does not hear Omi itself (echo cancellation or headphones).
+        self.barge_in = barge_in
+        self._barge_vad_factory = barge_vad_factory or (
+            lambda: EndpointDetector(silence_ms=cfg.silence_ms, threshold=BARGE_IN_THRESHOLD))
+        self._barge_vad: Endpoint | None = None
         self._vad: Endpoint | None = None
         self._audio: AudioIn | None = None
         self._task: asyncio.Task[None] | None = None
@@ -369,6 +383,8 @@ class WakeListener:
             self._detector = await loop.run_in_executor(self._pool, WakeDetector, self.cfg)
         if self._vad is None:
             self._vad = await loop.run_in_executor(self._pool, self._vad_factory)
+        if self.barge_in and self._barge_vad is None:
+            self._barge_vad = await loop.run_in_executor(self._pool, self._barge_vad_factory)
         self._running = True
         self._task = asyncio.create_task(self._run(), name="omi-wake-loop")
 
@@ -449,6 +465,8 @@ class WakeListener:
             audio_seen_since_reset = False
             quiet_since: float | None = None
             turn_task: asyncio.Task[Any] | None = None
+            preroll: collections.deque[np.ndarray] = collections.deque(maxlen=PREROLL_CHUNKS)
+            barge_run = 0
 
             async def start_capture(timeout_s: float) -> None:
                 nonlocal capturing, speech_seen, capture_started, active_timeout, reopen_at, confirm_reopen_at
@@ -551,7 +569,45 @@ class WakeListener:
                         or self.session.state in (State.SPEAKING, State.THINKING, State.ACTING)
                     )
                     if busy:
+                        if not was_busy:
+                            preroll.clear()
+                            barge_run = 0
+                            if self._barge_vad is not None:
+                                await loop.run_in_executor(self._pool, self._barge_vad.reset)
                         was_busy = True
+                        # Never interrupt a tool that is running: only thinking or talking.
+                        if not self.barge_in or self.session.state not in (State.SPEAKING, State.THINKING):
+                            continue
+                        preroll.append(chunk)
+                        interrupt = False
+                        if self.conversing and self._barge_vad is not None:
+                            vad = self._barge_vad
+                            await loop.run_in_executor(self._pool, vad.feed, chunk)
+                            if vad.ended:
+                                await loop.run_in_executor(self._pool, vad.reset)
+                            barge_run = barge_run + 1 if vad.speaking else 0
+                            interrupt = barge_run >= BARGE_IN_CHUNKS
+                        elif not self.conversing:
+                            hit = await loop.run_in_executor(self._pool, self._detector.feed, chunk)
+                            if hit:
+                                log.info("wake word while busy: %s", hit)
+                                self.conversing = effective_call_mode(self.cfg) != "single"
+                                if self._broadcast is not None:
+                                    await self._broadcast({"event": "wake", "phrase": hit, "conversing": self.conversing})
+                                preroll.clear()  # the wake word itself is not part of the request
+                                interrupt = True
+                        if interrupt:
+                            log.info("barge-in: the user talked over Omi")
+                            turn_task = None  # its result no longer decides anything
+                            was_busy = False
+                            barge_run = 0
+                            buffered = list(preroll)
+                            preroll.clear()
+                            await start_capture(self.cfg.followup_timeout_s)
+                            for past in buffered:
+                                self.session.feed_audio(past)
+                                await loop.run_in_executor(self._pool, self._vad.feed, past)
+                            speech_seen = bool(buffered)
                         continue
 
                     # Active phone-call follow-up: reopen mic automatically once reply audio settles.

@@ -464,3 +464,77 @@ async def test_conversational_mode_drops_on_prolonged_silence(tmp_path):
     finally:
         await listener.stop()
         await session.close()
+
+
+class _AlwaysSpeakingVAD:
+    speaking = False
+    ended = False
+
+    def reset(self) -> None:
+        self.speaking = False
+
+    def feed(self, chunk: np.ndarray) -> None:
+        self.speaking = True
+
+
+def _story_brain() -> FakeBrain:
+    def script(text: str):
+        if "story" in text:
+            return [(0.0, TextDelta("Once upon a time, there was a tiny robot.")), (3.0, TextDelta("It liked tea.")),
+                    (0.0, TurnDone())]
+        return [(0.0, TextDelta(f"Reply to {text}")), (0.0, TurnDone())]
+    return FakeBrain(script)
+
+
+async def _talk_over(tmp_path, *, barge_in: bool) -> tuple[list[dict], FakeBrain]:
+    events: list[dict] = []
+
+    async def broadcast(ev: dict) -> None:
+        events.append(ev)
+
+    brain = _story_brain()
+    session = Session(
+        stt=_MultiTurnSTT(["tell me a story", "actually what's the weather"]),
+        tts=FakeTTS(), brain=brain, registry=ToolRegistry(), router=lambda _: None,
+        out=CaptureOut(), emit=broadcast, state_dir=tmp_path,
+    )
+    await session.start()
+    chunks = [np.ones(512, dtype=np.float32) * 0.05 for _ in range(200)]
+    listener = wake.WakeListener(
+        session,
+        config.WakeConfig(enabled=True, chime=False, call_mode="continuous", followup_timeout_s=2.0),
+        broadcast=broadcast,
+        audio_in_factory=lambda: _FakeStreamAudioIn(chunks),
+        detector=_ScriptedDetector(trigger_at=1),
+        vad_factory=lambda: _ScriptedVAD(speak_chunks=2, end_after=3),
+        barge_vad_factory=_AlwaysSpeakingVAD,
+        barge_in=barge_in,
+        post_speech_cooldown_s=0.02,
+    )
+    await listener.start()
+    try:
+        for _ in range(100):
+            if any(e.get("event") == "transcript" and "weather" in e.get("text", "") and e["role"] == "assistant"
+                   for e in events):
+                break
+            await asyncio.sleep(0.02)
+    finally:
+        await listener.stop()
+        await session.close()
+    return events, brain
+
+
+@pytest.mark.asyncio
+async def test_talking_over_omi_interrupts_it_and_runs_the_new_request(tmp_path):
+    events, brain = await _talk_over(tmp_path, barge_in=True)
+    assert [t for t, _ in brain.turns] == ["tell me a story", "actually what's the weather"]
+    assert brain.cancels >= 1
+    replies = [e["text"] for e in events if e.get("event") == "transcript" and e.get("role") == "assistant"]
+    assert replies[-1] == "Reply to actually what's the weather"
+    assert "It liked tea." not in " ".join(replies)  # the rest of the story was never said
+
+
+@pytest.mark.asyncio
+async def test_without_barge_in_omi_finishes_talking_first(tmp_path):
+    events, brain = await _talk_over(tmp_path, barge_in=False)
+    assert [t for t, _ in brain.turns] == ["tell me a story"]  # talking over it did nothing

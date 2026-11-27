@@ -294,3 +294,22 @@ async def test_daemon_settings_persist_and_broadcast(tmp_path):
     finally:
         await daemon.close()
         shutil.rmtree(sock_dir, ignore_errors=True)
+
+
+def test_local_model_pick_prefers_a_fast_moe_that_fits(tmp_path):
+    from omi.brain import catalog
+
+    sizes = {"Qwen3.5-4B-Q4_K_M.gguf": 2.7, "gemma-4-26B-A4B-it-Q4_K_XL.gguf": 14.2,
+             "gemma-4-12b-it-Q4_K_M.gguf": 7.1, "Qwen3.8-27B-IQ4_XS.gguf": 14.4, "mmproj-F16.gguf": 1.2}
+    models = []
+    for name, gb in sizes.items():
+        path = tmp_path / name
+        with path.open("wb") as fh:
+            fh.truncate(int(gb * 1e9))
+    models = catalog.find_local_models((tmp_path,))
+    assert not any("mmproj" in m["path"] for m in models)
+    pick = catalog.recommend(models, memory_gb=27)
+    assert pick.endswith("gemma-4-26B-A4B-it-Q4_K_XL.gguf")
+    # A small machine only fits the dense 4B.
+    assert catalog.recommend(models, memory_gb=16).endswith("Qwen3.5-4B-Q4_K_M.gguf")
+    assert catalog.recommend(models, memory_gb=8) == ""

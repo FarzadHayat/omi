@@ -7,8 +7,10 @@ the user for confirmation aloud before running.
 
 from __future__ import annotations
 
+import difflib
 import json
 import os
+import re
 import shutil
 from pathlib import Path
 from typing import Any
@@ -19,6 +21,10 @@ from omi.tools.system import run, spawn
 
 HERDR_SOCK = Path.home() / ".config/herdr/herdr.sock"
 T3_RUNTIME = Path.home() / ".t3/runtime"
+# Where spoken project names ("bne tower") are looked up as folders.
+PROJECT_ROOTS = (Path.home() / "Work", Path.home() / "Projects", Path.home() / "src", Path.home())
+_UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
+_THREAD_LINK = re.compile(r"(?:https://app\.t3\.codes/threads|t3code(?:-[a-z]+)?://threads)/([^/\s]+)/([^/\s?#]+)")
 
 
 # --- backend discovery ---
@@ -332,10 +338,40 @@ async def terminal_open(directory: str = "", command: str = "", direction: str =
 # --- T3 Code command builders ---
 
 
+def _squash(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
+def resolve_project(project: str, roots: tuple[Path, ...] = PROJECT_ROOTS) -> str:
+    """A project as the t3 CLI takes it: a path, a project id, or a spoken folder name
+    ("bne tower" finds ~/Work/bne-tower). Unknown names are passed through unchanged."""
+    project = project.strip()
+    if not project or project.startswith(("~", "/", ".")):
+        return _expand_path(project)
+    if _UUID.match(project):
+        return project
+    want = _squash(project)
+    folders: dict[str, Path] = {}
+    for root in roots:
+        try:
+            for child in root.iterdir():
+                if child.is_dir() and not child.name.startswith("."):
+                    folders.setdefault(_squash(child.name), child)
+        except OSError:
+            continue
+    if want in folders:
+        return str(folders[want])
+    contains = [k for k in folders if k and (want in k or k in want)]
+    if len(contains) == 1:
+        return str(folders[contains[0]])
+    close = difflib.get_close_matches(want, list(folders), n=1, cutoff=0.6)
+    return str(folders[close[0]]) if close else project
+
+
 def build_t3_threads(t3_bin: str, project: str = "") -> list[str]:
     argv = [t3_bin, "thread", "list", "--json"]
     if project:
-        argv += ["--project", _expand_path(project) if project.startswith(("~", "/", ".")) else project]
+        argv += ["--project", resolve_project(project)]
     return argv
 
 
@@ -344,7 +380,7 @@ def build_t3_read(t3_bin: str, thread: str, messages: int = 5) -> list[str]:
 
 
 def build_t3_start(t3_bin: str, project: str, message: str, title: str = "") -> list[str]:
-    proj = _expand_path(project) if project.startswith(("~", "/", ".")) else project
+    proj = resolve_project(project)
     argv = [t3_bin, "thread", "start", "--json"]
     if title:
         argv += ["--title", title]
@@ -359,8 +395,18 @@ def build_t3_send(t3_bin: str, thread: str, message: str) -> list[str]:
 
 
 def build_t3_open(t3_bin: str, project: str) -> list[str]:
-    proj = _expand_path(project) if project.startswith(("~", "/", ".")) else project
-    return [t3_bin, "app", proj]
+    return [t3_bin, "app", resolve_project(project)]
+
+
+def t3_app_link(link: str) -> str | None:
+    """The desktop deep link (t3code://threads/<environment>/<thread>) for a thread link."""
+    m = _THREAD_LINK.search(link or "")
+    return f"t3code://threads/{m.group(1)}/{m.group(2)}" if m else None
+
+
+def build_open_link(url: str) -> list[list[str]]:
+    """Ways to hand a link to its registered app, best first."""
+    return [[exe, *args, url] for exe, args in (("gio", ["open"]), ("xdg-open", [])) if shutil.which(exe)]
 
 
 # --- T3 Code tools ---
@@ -394,12 +440,13 @@ async def t3_threads(project: str = "", limit: int = 8) -> ToolResult:
             "model": t.get("model", ""),
             "projectId": t.get("projectId", ""),
             "updatedAt": t.get("updatedAt", ""),
+            "link": t.get("link", ""),
         }
         for t in threads[:n]
     ]
     if not slim:
         return ToolResult(True, "No T3 Code threads found.", {"threads": []})
-    spoken = "; ".join(f"{t['title']} ({t['status']}, id {t['id'][:8]})" for t in slim[:5])
+    spoken = "; ".join(f"{t['title']} ({t['status']})" for t in slim[:5])
     return ToolResult(True, f"{len(threads)} T3 Code threads. Most recent: {spoken}.", {"threads": slim})
 
 
@@ -461,17 +508,66 @@ async def t3_send(thread: str, message: str) -> ToolResult:
                       data if isinstance(data, dict) else {"raw": out})
 
 
-async def t3_open(project: str = "") -> ToolResult:
-    if project.strip():
-        t3 = _require_t3()
-        if not t3:
-            return ToolResult(False, "T3 Code CLI is not installed on this machine.")
-        rc, out, err = await run(build_t3_open(t3, project.strip()), timeout=10.0)
-        if rc != 0:
+async def _thread_link(t3: str, thread: str) -> tuple[str | None, str]:
+    """(desktop deep link, title) for a thread id or link."""
+    if link := t3_app_link(thread):
+        return link, ""
+    rc, out, err = await run(build_t3_read(t3, thread, 1), timeout=15.0)
+    data = _parse_json(out) if rc == 0 else None
+    info = (data.get("thread") or data) if isinstance(data, dict) else {}
+    return t3_app_link(str(info.get("link", ""))), str(info.get("title", ""))
+
+
+def _focus_t3_window() -> bool:
+    clients = hyprland.hypr_query("clients") or []
+    for c in clients:
+        if "t3code" in (c.get("class") or c.get("initialClass") or "").lower():
+            ok, _ = hyprland.send_first_ok(hyprland.build_focus_window(c["address"]))
+            return ok
+    return False
+
+
+async def _open_link(url: str) -> bool:
+    for argv in build_open_link(url):
+        try:
+            rc, _, _ = await run(argv, timeout=10.0)
+        except (OSError, TimeoutError):
+            continue
+        if rc == 0:
+            return True
+    return False
+
+
+async def t3_open(project: str = "", thread: str = "") -> ToolResult:
+    """Show T3 Code on screen: a thread (id or link) when given, else a project's newest
+    thread, else just the app. Threads open through the desktop deep link, which works
+    even when `t3 app` cannot reach the desktop app."""
+    project, thread = project.strip(), thread.strip()
+    if not project and not thread:
+        return await hyprland.launch_or_focus("t3code")
+    t3 = _require_t3()
+    if not t3:
+        return ToolResult(False, "T3 Code CLI is not installed on this machine.")
+    title = ""
+    if not thread:
+        rc, out, err = await run(build_t3_open(t3, project), timeout=10.0)
+        if rc == 0:
+            _focus_t3_window()
+            return ToolResult(True, f"Opened {Path(resolve_project(project)).name or project} in T3 Code.")
+        listed = await t3_threads(project, 1)
+        threads = (listed.data or {}).get("threads") or [] if listed.ok else []
+        if not threads:
             msg = (err or out).strip().splitlines()
-            return ToolResult(False, f"Could not open project in T3 Code: {msg[0] if msg else 'exit ' + str(rc)}")
-        return ToolResult(True, f"Opened {Path(project.strip()).name or project.strip()} in T3 Code.")
-    return await hyprland.launch_or_focus("t3code")
+            return ToolResult(False, f"Could not open that project in T3 Code: {msg[0] if msg else 'no threads found'}")
+        thread, title = threads[0]["link"] or threads[0]["id"], threads[0]["title"]
+    link, found_title = await _thread_link(t3, thread)
+    if not link:
+        return ToolResult(False, "I couldn't find that T3 Code thread.")
+    if not await _open_link(link):
+        return ToolResult(False, "T3 Code didn't take the link. Is the desktop app installed?")
+    _focus_t3_window()
+    name = title or found_title
+    return ToolResult(True, f"Opened {name} in T3 Code." if name else "Opened the thread in T3 Code.", {"link": link})
 
 
 # --- tool schemas ---
@@ -495,7 +591,7 @@ def tools() -> list[Tool]:
         Tool("terminal_open", "Open or split a terminal pane (Herdr, tmux, or system terminal), optionally in a directory.",
              _schema({"directory": s, "command": s, "direction": {"type": "string", "enum": ["right", "down"]}}),
              "reversible", terminal_open, terminal_open_question, terminal_command_safety),
-        Tool("t3_threads", "List T3 Code threads for a project folder path or ID (defaults to current or Scratch project).",
+        Tool("t3_threads", "List T3 Code threads (id, title, status, link) for a project: a folder name like 'bne tower', a path, or an ID.",
              _schema({"project": s, "limit": i}), "read", t3_threads),
         Tool("t3_read", "Read recent messages and status of a T3 Code thread by ID.",
              _schema({"thread": s, "messages": i}, ["thread"]), "read", t3_read),
@@ -503,6 +599,7 @@ def tools() -> list[Tool]:
              _schema({"project": s, "message": s, "title": s}, ["project", "message"]), "reversible", t3_start),
         Tool("t3_send", "Send a follow-up message to an existing T3 Code thread.",
              _schema({"thread": s, "message": s}, ["thread", "message"]), "reversible", t3_send),
-        Tool("t3_open", "Focus T3 Code or open a project folder inside the T3 Code desktop app.",
-             _schema({"project": s}), "reversible", t3_open),
+        Tool("t3_open", "Show T3 Code on screen. With `thread` (id or link) it goes straight to that thread; "
+             "with only `project` it opens that project's newest thread; with neither it just focuses the app.",
+             _schema({"project": s, "thread": s}), "reversible", t3_open),
     ]

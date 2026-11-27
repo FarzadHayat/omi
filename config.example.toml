@@ -8,6 +8,8 @@ source = ""        # PipeWire mic source name; empty = default microphone
 sink = ""          # PipeWire output sink; empty = default output ("null" = silent)
 silence_ms = 300   # Hands-free silence window in milliseconds
 sounds = true      # Cute soft-bell UI & voice sound effects (wake, heard, acting, confirm, done, sleep)
+echo_cancel = true # Cancel Omi's own voice from the mic (PipeWire WebRTC echo canceller)
+barge_in = true    # Talk over Omi to interrupt it mid-sentence (needs echo_cancel or headphones)
 
 [wake]
 enabled = true
@@ -43,6 +45,9 @@ speed = 1.0
 # Subscription CLIs use your existing CLI login (no API keys required).
 talker = "claude"
 worker = "claude"
+# Backups, in order, when the talker fails before answering (usage limit, expired login).
+# "provider" or "provider:model". A failed brain sits out 15 minutes, then gets retried.
+fallbacks = ["opencode", "local"]
 
 [brain.claude]
 model = "haiku"
@@ -73,6 +78,7 @@ worker_model = ""
 [brain.local]
 # Works with llama-server (leave base_url empty), Ollama ("http://127.0.0.1:11434/v1"),
 # LM Studio, OpenRouter, xAI/Grok ("https://api.x.ai/v1"), or any OpenAI-compatible API.
+# model = "~/models/gemma-4-26B-A4B/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf"  # .gguf for llama-server
 base_url = ""
 api_key_env = ""
 model_name = "local"

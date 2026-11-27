@@ -171,3 +171,36 @@ async def test_daemon_mascot_broadcasts_and_live_voice_set(tmp_path):
     finally:
         await daemon.close()
         shutil.rmtree(sock_dir, ignore_errors=True)
+
+
+def test_t3_project_names_and_thread_links(tmp_path):
+    (tmp_path / "bne-tower").mkdir()
+    (tmp_path / "danzeira").mkdir()
+    roots = (tmp_path,)
+    assert dev.resolve_project("bne tower", roots) == str(tmp_path / "bne-tower")
+    assert dev.resolve_project("Danzeira", roots) == str(tmp_path / "danzeira")
+    assert dev.resolve_project("brisbane tower", roots) == str(tmp_path / "bne-tower")
+    assert dev.resolve_project("16f74345-7a19-4416-862f-d31d8f6b9f58", roots) == "16f74345-7a19-4416-862f-d31d8f6b9f58"
+    assert dev.resolve_project("nothing like it", roots) == "nothing like it"
+    assert dev.t3_app_link("https://app.t3.codes/threads/env-1/thread-2") == "t3code://threads/env-1/thread-2"
+    assert dev.t3_app_link("t3code://threads/env-1/thread-2?x=1") == "t3code://threads/env-1/thread-2"
+    assert dev.t3_app_link("thread-2") is None
+
+
+@pytest.mark.asyncio
+async def test_t3_open_goes_to_a_thread_through_the_desktop_link(monkeypatch):
+    calls: list[list[str]] = []
+    monkeypatch.setattr(dev, "find_t3_binary", lambda: "/fake/t3")
+    monkeypatch.setattr(dev, "build_open_link", lambda url: [["gio", "open", url]])
+    monkeypatch.setattr(dev, "_focus_t3_window", lambda: True)
+
+    async def fake_run(argv, timeout=3.0, stdin=None):
+        calls.append(argv)
+        if argv[:3] == ["/fake/t3", "thread", "show"]:
+            return 0, json.dumps({"thread": {"title": "Post Update", "link": "https://app.t3.codes/threads/e/t-9"}}), ""
+        return 0, "", ""
+
+    monkeypatch.setattr(dev, "run", fake_run)
+    res = await dev.t3_open(thread="t-9")
+    assert res.ok and "Post Update" in res.text
+    assert calls[-1] == ["gio", "open", "t3code://threads/e/t-9"]

@@ -36,6 +36,8 @@ Item {
   property real ttsSpeed: 1.0
   property string voice: "af_heart"
   property var providers: []
+  // { providers, models, model, talker, fallbacks, active, fallback_reason, local_model, local_endpoint }
+  property var brain: ({})
   property var sttEngines: []
   property var ttsEngines: []
   property var voices: ["af_heart", "af_bella", "am_adam", "bf_emma", "bm_george"]
@@ -91,8 +93,14 @@ Item {
       }
     } else if (ev === "wake") {
       if (typeof msg.enabled === "boolean") wakeEnabled = msg.enabled
+    } else if (ev === "brain") {
+      var next = Object.assign({}, brain)
+      if (typeof msg.active === "string") next.active = msg.active
+      if (typeof msg.reason === "string") next.fallback_reason = msg.reason
+      brain = next
     } else if (ev === "settings") {
       if (typeof msg.talker === "string") talker = msg.talker
+      if (msg.brain && typeof msg.brain === "object") brain = msg.brain
       if (typeof msg.voice === "string" && msg.voice !== "") voice = msg.voice
       if (Array.isArray(msg.voices)) voices = msg.voices
       if (Array.isArray(msg.stt_engines)) sttEngines = msg.stt_engines
@@ -123,6 +131,7 @@ Item {
         if (typeof msg.engines.speed === "number" && isFinite(msg.engines.speed)) ttsSpeed = msg.engines.speed
       }
       if (Array.isArray(msg.providers)) providers = msg.providers
+      if (msg.brain && typeof msg.brain === "object") brain = msg.brain
       if (Array.isArray(msg.stt_engines)) sttEngines = msg.stt_engines
       if (Array.isArray(msg.tts_engines)) ttsEngines = msg.tts_engines
       if (Array.isArray(msg.voices)) voices = msg.voices
@@ -233,6 +242,23 @@ Item {
   function setProvider(name) {
     if (!name || name === talker) return false
     return setSetting("brain.talker", name)
+  }
+
+  // Local models without a custom endpoint are files; everything else is a model name.
+  readonly property bool localFiles: talker === "local" && !(brain && brain.local_endpoint)
+
+  function currentModel() {
+    if (!brain) return ""
+    return localFiles ? (brain.local_model || "") : (brain.model || "")
+  }
+
+  function setModel(value) {
+    if (value === currentModel()) return false
+    return setSetting(localFiles ? "brain.local_model" : "brain.model", value)
+  }
+
+  function setFallbacks(list) {
+    return setSetting("brain.fallbacks", (list || []).join(","))
   }
 
   // Answers exactly the question on screen: the daemon refuses an id that is no

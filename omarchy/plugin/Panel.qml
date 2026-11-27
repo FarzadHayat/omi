@@ -54,6 +54,71 @@ Panel {
     return out.length > 0 ? out : ["claude", "opencode", "local"]
   }
 
+  property bool customModel: false
+
+  // Brain choices from the daemon, each labelled by where it runs.
+  readonly property var providerOptions: {
+    var list = (omi.brain && omi.brain.providers) || []
+    if (list.length > 0) return list
+    return installedProviders.map(function(n) { return { value: n, label: n } })
+  }
+
+  readonly property var modelOptions: {
+    var models = (omi.brain && omi.brain.models && omi.brain.models[omi.talker]) || []
+    return models.concat([{ value: "__custom__", label: strings.t("settings.custom") }])
+  }
+
+  readonly property var fallbackList: (omi.brain && omi.brain.fallbacks) || []
+
+  readonly property var backupChoices: {
+    var out = []
+    var list = providerOptions
+    for (var i = 0; i < list.length; i++) {
+      var v = list[i].value
+      if (v !== omi.talker && fallbackList.indexOf(v) < 0) out.push({ value: v, label: list[i].label })
+    }
+    return out
+  }
+
+  readonly property string fallbackNotice: {
+    var b = omi.brain || {}
+    if (!b.active || b.active === omi.talker || !b.fallback_reason) return ""
+    return strings.t("settings.using_backup").arg(entryLabel(b.active))
+  }
+
+  function entryLabel(entry) {
+    var name = String(entry).split(":")[0]
+    var model = String(entry).indexOf(":") >= 0 ? String(entry).slice(name.length + 1) : ""
+    var list = providerOptions
+    var label = name
+    for (var i = 0; i < list.length; i++) if (list[i].value === name) label = list[i].label
+    return model !== "" ? label + " · " + model : label
+  }
+
+  function removeFallback(index) {
+    var next = fallbackList.slice()
+    next.splice(index, 1)
+    omi.setFallbacks(next)
+  }
+
+  // Speech engines: "Parakeet v3 · on this PC", "Groq · cloud · needs GROQ_API_KEY".
+  function engineOptions(list, current) {
+    var out = []
+    var arr = list || []
+    for (var i = 0; i < arr.length; i++) {
+      var e = arr[i]
+      var where = e.kind === "local" ? strings.t("settings.on_this_pc") : strings.t("settings.cloud")
+      var label = (e.label || engineLabel(e.name)) + " · " + where
+      if (!e.installed) {
+        var key = (String(e.detail || "").match(/\(([A-Z0-9_]+)\)/) || [])[1]
+        label += " · " + (e.kind === "local" ? strings.t("settings.not_downloaded") : strings.t("settings.needs_key").arg(key || "API key"))
+      }
+      out.push({ value: e.name, label: label })
+    }
+    if (out.length === 0 && current) out.push({ value: current, label: engineLabel(current) })
+    return out
+  }
+
   function voiceLabel(id) {
     var map = {
       "af_heart": "Heart",
@@ -198,7 +263,7 @@ Panel {
       id: keyCatcher
       anchors.fill: parent
       clip: true
-      blocked: input.activeFocus
+      blocked: input.activeFocus || customModelField.activeFocus
       onMoveRequested: function(dx, dy) { if (dy !== 0) root.moveCursor(dy) }
       onActivateRequested: if (root.cursorActive) root.activate(root.currentRow)
       onCloseRequested: root.close()
@@ -535,7 +600,7 @@ Panel {
           objectName: "settingsCard"
           visible: root.settingsOpen && omi.connected
           Layout.fillWidth: true
-          Layout.preferredHeight: Math.min(settingsCol.implicitHeight + Style.space(18), Style.space(270))
+          Layout.preferredHeight: Math.min(settingsCol.implicitHeight + Style.space(18), Style.space(340))
           implicitHeight: Layout.preferredHeight
           color: "transparent"
           borderSpec: Border.controlSpec("normal", root.dim, Commons.Color.popups.border)
@@ -555,202 +620,243 @@ Panel {
               width: parent.width
               spacing: Style.space(8)
 
-              // Provider picker
-              ColumnLayout {
+              // ---- Brain: who answers, which model, and backups ------------
+              Text {
+                textFormat: Text.PlainText
+                text: strings.t("settings.brain").toUpperCase()
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+                font.letterSpacing: 0.8
+              }
+
+              Dropdown {
+                objectName: "providerDropdown"
                 Layout.fillWidth: true
-                spacing: Style.space(4)
+                label: strings.t("settings.provider")
+                fontFamily: root.fontFamily
+                options: root.providerOptions
+                readonly property string bound: omi.talker
+                value: bound
+                onBoundChanged: value = bound
+                onChanged: function(v) { omi.setProvider(v) }
+                Accessible.name: strings.t("settings.provider")
+              }
 
-                Text {
-                  textFormat: Text.PlainText
-                  text: strings.t("settings.provider").toUpperCase()
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  font.bold: true
-                  font.letterSpacing: 0.8
+              Dropdown {
+                objectName: "modelDropdown"
+                Layout.fillWidth: true
+                label: strings.t("settings.model")
+                fontFamily: root.fontFamily
+                options: root.modelOptions
+                readonly property string bound: root.customModel ? "__custom__" : omi.currentModel()
+                value: bound
+                onBoundChanged: value = bound
+                onChanged: function(v) {
+                  if (v === "__custom__") {
+                    root.customModel = true
+                    Qt.callLater(function() { customModelField.forceActiveFocus() })
+                  } else {
+                    root.customModel = false
+                    omi.setModel(v)
+                  }
                 }
+                Accessible.name: strings.t("settings.model")
+              }
 
-                Flow {
-                  Layout.fillWidth: true
-                  spacing: Style.space(6)
-
-                  Repeater {
-                    model: root.installedProviders
-                    delegate: Button {
-                      required property string modelData
-                      text: modelData
-                      bordered: true
-                      foreground: omi.talker === modelData ? Commons.Color.accent : root.foreground
-                      fontFamily: root.fontFamily
-                      onClicked: omi.setProvider(modelData)
-                      Accessible.role: Accessible.Button
-                      Accessible.name: strings.t("settings.provider") + ": " + modelData
-                    }
+              TextField {
+                id: customModelField
+                objectName: "customModelField"
+                visible: root.customModel
+                Layout.fillWidth: true
+                placeholderText: omi.localFiles ? strings.t("settings.custom_local") : strings.t("settings.custom_model")
+                foreground: root.foreground
+                font.family: root.fontFamily
+                Accessible.name: strings.t("settings.custom_model")
+                Keys.onPressed: function(event) {
+                  if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                    if (text.trim() !== "") omi.setModel(text.trim())
+                    root.customModel = false
+                    text = ""
+                    event.accepted = true
+                  } else if (event.key === Qt.Key_Escape) {
+                    root.customModel = false
+                    text = ""
+                    event.accepted = true
                   }
                 }
               }
 
-              // STT engine selector
-              RowLayout {
+              Text {
+                objectName: "fallbackNotice"
+                visible: text !== ""
                 Layout.fillWidth: true
-                spacing: Style.space(8)
+                textFormat: Text.PlainText
+                text: root.fallbackNotice
+                color: root.urgent
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
+              }
 
-                Text {
-                  textFormat: Text.PlainText
-                  text: strings.t("settings.stt")
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
+              Text {
+                textFormat: Text.PlainText
+                text: strings.t("settings.backups")
+                color: Qt.darker(root.foreground, 1.4)
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+              }
 
-                Item { Layout.fillWidth: true }
+              Repeater {
+                model: root.fallbackList
+                delegate: RowLayout {
+                  required property string modelData
+                  required property int index
+                  Layout.fillWidth: true
+                  spacing: Style.space(6)
 
-                Button {
-                  objectName: "sttButton"
-                  text: root.engineLabel(omi.sttEngine)
-                  bordered: true
-                  foreground: root.foreground
-                  fontFamily: root.fontFamily
-                  onClicked: omi.cycleStt()
-                  Accessible.role: Accessible.Button
-                  Accessible.name: strings.t("settings.stt") + ": " + text
+                  Text {
+                    Layout.fillWidth: true
+                    textFormat: Text.PlainText
+                    text: (index + 1) + ". " + root.entryLabel(modelData)
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                    elide: Text.ElideRight
+                  }
+
+                  Button {
+                    text: "\u{f0156}"
+                    bordered: true
+                    foreground: root.dim
+                    fontFamily: root.fontFamily
+                    onClicked: root.removeFallback(index)
+                    Accessible.role: Accessible.Button
+                    Accessible.name: strings.t("settings.remove_backup").arg(root.entryLabel(modelData))
+                  }
                 }
               }
 
-              // TTS engine selector
-              RowLayout {
+              Dropdown {
+                objectName: "addBackupDropdown"
+                visible: root.backupChoices.length > 0
                 Layout.fillWidth: true
-                spacing: Style.space(8)
-
-                Text {
-                  textFormat: Text.PlainText
-                  text: strings.t("settings.tts")
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
+                showLabel: false
+                fontFamily: root.fontFamily
+                options: [{ value: "", label: strings.t("settings.add_backup") }].concat(root.backupChoices)
+                value: ""
+                onChanged: function(v) {
+                  if (v !== "") omi.setFallbacks(root.fallbackList.concat([v]))
+                  value = ""
                 }
-
-                Item { Layout.fillWidth: true }
-
-                Button {
-                  objectName: "ttsButton"
-                  text: root.engineLabel(omi.ttsEngine)
-                  bordered: true
-                  foreground: root.foreground
-                  fontFamily: root.fontFamily
-                  onClicked: omi.cycleTts()
-                  Accessible.role: Accessible.Button
-                  Accessible.name: strings.t("settings.tts") + ": " + text
-                }
+                Accessible.name: strings.t("settings.add_backup")
               }
 
-              // Voice selector (shown whenever the active TTS engine has voice presets)
-              RowLayout {
+              PanelSeparator { Layout.fillWidth: true; foreground: root.foreground }
+
+              // ---- Voice: hearing and speaking ------------------------------
+              Text {
+                textFormat: Text.PlainText
+                text: strings.t("settings.voice_section").toUpperCase()
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+                font.letterSpacing: 0.8
+              }
+
+              Dropdown {
+                objectName: "sttDropdown"
+                Layout.fillWidth: true
+                label: strings.t("settings.stt")
+                fontFamily: root.fontFamily
+                options: root.engineOptions(omi.sttEngines, omi.sttEngine)
+                readonly property string bound: omi.sttEngine
+                value: bound
+                onBoundChanged: value = bound
+                onChanged: function(v) { if (v !== omi.sttEngine) omi.setSetting("stt.engine", v) }
+                Accessible.name: strings.t("settings.stt")
+              }
+
+              Dropdown {
+                objectName: "ttsDropdown"
+                Layout.fillWidth: true
+                label: strings.t("settings.tts")
+                fontFamily: root.fontFamily
+                options: root.engineOptions(omi.ttsEngines, omi.ttsEngine)
+                readonly property string bound: omi.ttsEngine
+                value: bound
+                onBoundChanged: value = bound
+                onChanged: function(v) { if (v !== omi.ttsEngine) omi.setSetting("tts.engine", v) }
+                Accessible.name: strings.t("settings.tts")
+              }
+
+              Dropdown {
+                objectName: "voiceDropdown"
                 visible: omi.voices && omi.voices.length > 0
                 Layout.fillWidth: true
-                spacing: Style.space(8)
-
-                Text {
-                  textFormat: Text.PlainText
-                  text: strings.t("settings.voice")
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
-
-                Item { Layout.fillWidth: true }
-
-                Button {
-                  objectName: "voiceButton"
-                  text: root.voiceLabel(omi.voice)
-                  bordered: true
-                  foreground: root.foreground
-                  fontFamily: root.fontFamily
-                  onClicked: omi.cycleVoice()
-                  Accessible.role: Accessible.Button
-                  Accessible.name: strings.t("settings.voice") + ": " + text
-                }
+                label: strings.t("settings.voice")
+                fontFamily: root.fontFamily
+                options: (omi.voices || []).map(function(v) { return { value: v, label: root.voiceLabel(v) } })
+                readonly property string bound: omi.voice
+                value: bound
+                onBoundChanged: value = bound
+                onChanged: function(v) { if (v !== omi.voice) omi.setSetting("tts.voice", v) }
+                Accessible.name: strings.t("settings.voice")
               }
 
-              // Speech speed selector
-              RowLayout {
+              Dropdown {
+                objectName: "speedDropdown"
                 Layout.fillWidth: true
-                spacing: Style.space(8)
-
-                Text {
-                  textFormat: Text.PlainText
-                  text: strings.t("settings.speed")
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
-
-                Item { Layout.fillWidth: true }
-
-                Button {
-                  objectName: "speedButton"
-                  text: root.speedLabel(omi.ttsSpeed)
-                  bordered: true
-                  foreground: root.foreground
-                  fontFamily: root.fontFamily
-                  onClicked: omi.cycleSpeed()
-                  Accessible.role: Accessible.Button
-                  Accessible.name: strings.t("settings.speed") + ": " + text
-                }
+                label: strings.t("settings.speed")
+                fontFamily: root.fontFamily
+                options: [0.9, 1.0, 1.15, 1.3].map(function(v) { return { value: String(v), label: root.speedLabel(v) } })
+                readonly property string bound: String(Math.round(omi.ttsSpeed * 100) / 100)
+                value: bound
+                onBoundChanged: value = bound
+                onChanged: function(v) { omi.setSetting("tts.speed", v) }
+                Accessible.name: strings.t("settings.speed")
               }
 
-              // Call mode toggle
-              RowLayout {
-                Layout.fillWidth: true
-                spacing: Style.space(8)
+              PanelSeparator { Layout.fillWidth: true; foreground: root.foreground }
 
-                Text {
-                  textFormat: Text.PlainText
-                  text: strings.t("settings.call_mode")
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
-
-                Item { Layout.fillWidth: true }
-
-                Button {
-                  objectName: "callModeButton"
-                  text: root.callModeLabel(omi.wakeCallMode)
-                  bordered: true
-                  foreground: omi.wakeCallMode !== "single" ? Commons.Color.accent : root.dim
-                  fontFamily: root.fontFamily
-                  onClicked: omi.cycleCallMode()
-                  Accessible.role: Accessible.Button
-                  Accessible.name: strings.t("settings.call_mode") + ": " + text
-                }
+              // ---- Listening ---------------------------------------------------
+              Text {
+                textFormat: Text.PlainText
+                text: strings.t("settings.listening").toUpperCase()
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+                font.letterSpacing: 0.8
               }
 
-              // Wake word sensitivity selector
-              RowLayout {
+              Dropdown {
+                objectName: "callModeDropdown"
                 Layout.fillWidth: true
-                spacing: Style.space(8)
+                label: strings.t("settings.call_mode")
+                fontFamily: root.fontFamily
+                options: ["auto", "continuous", "single"].map(function(v) { return { value: v, label: root.callModeLabel(v) } })
+                readonly property string bound: omi.wakeCallMode
+                value: bound
+                onBoundChanged: value = bound
+                onChanged: function(v) { if (v !== omi.wakeCallMode) omi.setSetting("wake.call_mode", v) }
+                Accessible.name: strings.t("settings.call_mode")
+              }
 
-                Text {
-                  textFormat: Text.PlainText
-                  text: strings.t("settings.sensitivity")
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
-
-                Item { Layout.fillWidth: true }
-
-                Button {
-                  objectName: "sensitivityButton"
-                  text: root.sensitivityLabel(omi.wakeSensitivity)
-                  bordered: true
-                  foreground: root.foreground
-                  fontFamily: root.fontFamily
-                  onClicked: omi.cycleSensitivity()
-                  Accessible.role: Accessible.Button
-                  Accessible.name: strings.t("settings.sensitivity") + ": " + text
-                }
+              Dropdown {
+                objectName: "sensitivityDropdown"
+                Layout.fillWidth: true
+                label: strings.t("settings.sensitivity")
+                fontFamily: root.fontFamily
+                options: ["low", "medium", "high"].map(function(v) { return { value: v, label: root.sensitivityLabel(v) } })
+                readonly property string bound: omi.wakeSensitivity
+                value: bound
+                onBoundChanged: value = bound
+                onChanged: function(v) { if (v !== omi.wakeSensitivity) omi.setSetting("wake.sensitivity", v) }
+                Accessible.name: strings.t("settings.sensitivity")
               }
 
               // Cute sound effects toggle

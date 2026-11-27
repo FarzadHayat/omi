@@ -8,6 +8,8 @@ A local-first voice assistant and animated on-screen companion for Omarchy & Hyp
 
 ## Features
 
+- **Talks like a phone call**: Interrupt Omi mid-sentence just by talking (PipeWire WebRTC echo cancellation keeps it from hearing itself, no headphones needed), and replies stay short and conversational.
+- **Never stuck on a limit**: The brain is a priority list (`brain.fallbacks`). If your preferred model hits its usage limit or fails before answering, the next one (for example a free OpenCode model, then a local model) takes the same turn, and the preferred one is retried after 15 minutes.
 - **Fast voice loop + smart wake word**: Always-on **"Hey Omi"** / **"Okay Omi"** wake word (`sherpa-onnx` 3.3M streaming keyword spotter + Silero VAD, ~1.7% CPU, toggleable live) with **Smart (`auto`)**, **Continuous**, and **Single-turn** call modes, plus soft procedural sound effects.
 - **Best local & cloud STT and TTS**:
   - **Local STT**: **NVIDIA Parakeet TDT 0.6B v3** (default — 10x faster than streaming, native punctuation & capitalization, 25 languages), **Nemotron Streaming 160ms**, or **Moonshine**.
@@ -19,9 +21,9 @@ A local-first voice assistant and animated on-screen companion for Omarchy & Hyp
   - **Hyprland & Omarchy**: Switch/focus/close windows and workspaces, control media/volume, clipboard, screenshots, notifications, and vetted `omarchy-*` commands.
   - **GUI & vision**: AT-SPI accessibility inspection and actions (`ui_inspect`, `ui_action`), screen capture (`capture_screen`), and pointer/keyboard control (`ydotool` + `wtype`).
   - **Browser**: Claude in Chrome MCP integration on the background worker for reading tabs, navigating, clicking, and filling forms.
-  - **Terminal & T3 Code**: Inspect and run commands in live **Herdr** or **tmux** panes, and list, read, start, or message **T3 Code** threads via the `t3` CLI.
+  - **Terminal & T3 Code**: Inspect and run commands in live **Herdr** or **tmux** panes, and list, read, start, message, or open on screen **T3 Code** threads (by project name, e.g. "show me the bne tower chat") via the `t3` CLI and T3's desktop deep links.
 - **Safety guardrails**: Hard-blocks reading secrets/keys/tokens and asks for spoken or on-screen confirmation before destructive commands, terminal mutations, or sensitive actions.
-- **Model-agnostic & subscription-first**: Works with your existing AI CLI subscriptions (no API keys needed) — **Claude Code** (`claude`), **OpenCode** (`opencode`, free models / Copilot / multi-provider subs), **Codex** (`codex`, ChatGPT Plus/Pro), **Antigravity** (`agy`, Google AI Pro/Ultra), **Gemini CLI** (`gemini`), or any **local / OpenAI-compatible** endpoint (`llama-server`, Ollama, LM Studio, OpenRouter, xAI/Grok). Switch providers or models live with `omi set brain.talker <provider>` and `omi set brain.model <model>`.
+- **Model-agnostic & subscription-first**: Works with your existing AI CLI subscriptions (no API keys needed) — **Claude Code** (`claude`), **OpenCode** (`opencode`, free models / Copilot / multi-provider subs), **Codex** (`codex`, ChatGPT Plus/Pro), **Antigravity** (`agy`, Google AI Pro/Ultra), **Gemini CLI** (`gemini`), or any **local / OpenAI-compatible** endpoint (`llama-server`, Ollama, LM Studio, OpenRouter, xAI/Grok). Switch providers or models live from the bar Settings drawer (dropdowns labelled "on this PC" or "cloud", with a "best for this PC" pick among your downloaded local models) or with `omi set brain.talker <provider>`, `omi set brain.model <model>`, `omi set brain.local_model <file.gguf>` and `omi set brain.fallbacks "opencode,local"`.
 - **Persistent compacting memory**: Markdown facts + rolling session digests + SQLite FTS5 search, with optional read-only shared memory directory (e.g. an Obsidian/Syncthing folder).
 - **Private mobile/tablet web UI**: Optional local web PWA served on `127.0.0.1:47911` for private access via `tailscale serve`.
 
