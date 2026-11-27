@@ -12,6 +12,7 @@ from collections.abc import AsyncIterator
 from omi.brain.claude_session import ClaudeSession
 from omi.brain.local import SpeechFilter
 from omi.config import HOME, Config
+from omi.brain.base import Worker
 from omi.events import WorkerDone, WorkerEvent, WorkerProgress
 from omi.tools.base import Tool, ToolResult
 
@@ -156,8 +157,83 @@ class ClaudeWorker:
         return WorkerDone(job_id, True, summary or "Done.")
 
 
-def delegate_tool(worker: ClaudeWorker) -> Tool:
+class SwitchableWorker:
+    """The session's one worker, which the settings can swap or turn off while Omi runs.
+
+    The delegate tool and the session's narration loop hold this object, so a new
+    worker takes over without either noticing. Jobs still running on the old worker
+    are stopped and reported as such.
+    """
+
+    def __init__(self, worker: Worker | None = None) -> None:
+        self.current = worker
+        self._events: asyncio.Queue[WorkerEvent] = asyncio.Queue()
+        self._open: set[str] = set()
+        self._pump: asyncio.Task[None] | None = None
+
+    @property
+    def active(self) -> bool:
+        return self.current is not None
+
+    async def start(self) -> None:
+        if self.current is not None:
+            await self.current.start()
+            self._pump_from(self.current)
+
+    async def submit(self, task: str) -> str:
+        if self.current is None:
+            raise RuntimeError("the background worker is off")
+        job_id = await self.current.submit(task)
+        self._open.add(job_id)
+        return job_id
+
+    async def events(self) -> AsyncIterator[WorkerEvent]:
+        while True:
+            yield await self._events.get()
+
+    async def cancel(self, job_id: str | None = None) -> None:
+        if self.current is not None:
+            await self.current.cancel(job_id)
+
+    async def swap(self, worker: Worker | None) -> None:
+        """Hand over to `worker` (already started), or turn the worker off with None."""
+        old, self.current = self.current, worker
+        await self._stop_pump()
+        if old is not None:
+            with contextlib.suppress(Exception):
+                await old.close()
+        for job_id in sorted(self._open):
+            self._events.put_nowait(WorkerDone(job_id, False, "Stopped, because the worker was changed."))
+        self._open.clear()
+        if worker is not None:
+            self._pump_from(worker)
+
+    async def close(self) -> None:
+        await self._stop_pump()
+        if self.current is not None:
+            await self.current.close()
+
+    def _pump_from(self, worker: Worker) -> None:
+        async def pump() -> None:
+            async for ev in worker.events():
+                if isinstance(ev, WorkerDone):
+                    self._open.discard(ev.job_id)
+                self._events.put_nowait(ev)
+
+        self._pump = asyncio.create_task(pump())
+
+    async def _stop_pump(self) -> None:
+        if self._pump is not None:
+            self._pump.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await self._pump
+            self._pump = None
+
+
+def delegate_tool(worker: Worker) -> Tool:
     async def delegate(task: str) -> ToolResult:
+        if not getattr(worker, "active", True):
+            return ToolResult(False, "The background worker is off. It can be turned on in Omi's settings.")
         job_id = await worker.submit(task)
         return ToolResult(True, "Started. I will tell you when it is done.", {"job_id": job_id})
 

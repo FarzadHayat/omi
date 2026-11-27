@@ -313,3 +313,25 @@ def test_local_model_pick_prefers_a_fast_moe_that_fits(tmp_path):
     # A small machine only fits the dense 4B.
     assert catalog.recommend(models, memory_gb=16).endswith("Qwen3.5-4B-Q4_K_M.gguf")
     assert catalog.recommend(models, memory_gb=8) == ""
+
+
+def test_cli_model_lists_for_codex_and_antigravity(monkeypatch):
+    import json as _json
+
+    from omi.brain import catalog
+
+    outputs = {
+        "codex": _json.dumps({"models": [
+            {"slug": "b", "display_name": "Model B", "visibility": "list", "priority": 2},
+            {"slug": "hidden", "display_name": "Hidden", "visibility": "hide", "priority": 0},
+            {"slug": "a", "display_name": "Model A", "visibility": "list", "priority": 1},
+        ]}),
+        "agy": "Fetching available models...\ngem-high\tGem (High)\ngem-low\tGem (Low)\n",
+    }
+    monkeypatch.setattr(catalog.shutil, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(catalog, "_run", lambda argv: outputs.get(argv[0], ""))
+    assert catalog._load_cli_models("codex") == [{"value": "a", "label": "Model A"}, {"value": "b", "label": "Model B"}]
+    assert catalog._load_cli_models("agy") == [{"value": "gem-high", "label": "Gem (High)"},
+                                               {"value": "gem-low", "label": "Gem (Low)"}]
+    outputs["codex"] = "not json"
+    assert catalog._load_cli_models("codex") == []

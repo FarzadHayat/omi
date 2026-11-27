@@ -84,11 +84,12 @@ async def build(cfg: Config) -> Daemon:
     registry = build_registry(cfg)
     for tool in memory_tools(memory):
         registry.register(tool)
-    worker = brains.create_worker(cfg)
-    if worker is not None:
-        from omi.worker import delegate_tool
+    from omi.worker import SwitchableWorker, delegate_tool
 
-        registry.register(delegate_tool(worker))
+    # Always present, so the settings can turn the worker on, off or over to another
+    # provider while Omi runs.
+    worker = SwitchableWorker(brains.create_worker(cfg))
+    registry.register(delegate_tool(worker))
     notices: list[Any] = []  # set to the daemon's broadcast once it exists
 
     async def on_switch(active: str, reason: str) -> None:
@@ -197,6 +198,34 @@ async def build(cfg: Config) -> Daemon:
             raise
         return brain
 
+    async def started_worker(c: Config) -> Any:
+        new = brains.create_worker(c)
+        if new is not None:
+            try:
+                await new.start()
+            except Exception:
+                await new.close()
+                raise
+        return new
+
+    async def new_worker(value: str) -> Any:
+        return await started_worker(replace(cfg, brain=replace(cfg.brain, worker=value)))
+
+    async def new_worker_model(value: str) -> Any:
+        from omi.brain.cli_providers import resolve_provider
+
+        provider = resolve_provider(cfg.brain.worker, role="worker")
+        if provider == "off":
+            raise ValueError("the worker is off")
+        if provider == "claude":
+            if not value:
+                raise ValueError("pick a model")
+            c = replace(cfg, brain=replace(cfg.brain, claude=replace(cfg.brain.claude, worker_model=value)))
+        else:
+            pcfg = getattr(cfg.brain, provider)
+            c = replace(cfg, brain=replace(cfg.brain, **{provider: replace(pcfg, worker_model=value)}))
+        return await started_worker(c)
+
     async def new_tts(value: str) -> Any:
         engine = await asyncio.to_thread(ttss.create, replace(cfg.tts, engine=value))
         await asyncio.to_thread(_warm_tts, engine)
@@ -237,8 +266,7 @@ async def build(cfg: Config) -> Daemon:
         await asyncio.to_thread(load_cli_models)
         for send in notices:
             await send(daemon._settings_event())
-    if worker is not None:
-        warmups["worker"] = worker.start
+    warmups["worker"] = worker.start
 
     async def stop_sync() -> None:
         if hasattr(memory, "stop_autosync"):
@@ -253,6 +281,8 @@ async def build(cfg: Config) -> Daemon:
             "brain.model": new_model,
             "brain.fallbacks": new_fallbacks,
             "brain.local_model": new_local_model,
+            "brain.worker": new_worker,
+            "brain.worker_model": new_worker_model,
             "tts.engine": new_tts,
             "tts.voice": new_voice,
             "stt.engine": new_stt,

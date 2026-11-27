@@ -57,5 +57,8 @@
   "settings.cloud": "cloud",
   "settings.not_downloaded": "not downloaded",
   "settings.needs_key": "needs %1",
-  "settings.provider": "Who answers"
+  "settings.provider": "Who answers",
+  "settings.worker_section": "Background worker",
+  "settings.worker": "Who does long jobs",
+  "settings.worker_model": "Worker model"
 }

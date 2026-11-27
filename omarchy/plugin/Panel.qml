@@ -19,6 +19,11 @@ Panel {
   readonly property color urgent: bar ? bar.urgent : Commons.Color.urgent
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
+  // Dropdown lists draw inside the panel, where the compositor cannot blur what
+  // is under them, so a theme's see-through popup color is made solid here or
+  // the settings below show through the options.
+  readonly property color dropdownBackground: Qt.rgba(Commons.Color.popups.background.r,
+    Commons.Color.popups.background.g, Commons.Color.popups.background.b, 1)
 
   Commons.Translations { id: strings; directory: Qt.resolvedUrl("i18n") }
 
@@ -69,6 +74,10 @@ Panel {
     var models = (omi.brain && omi.brain.models && omi.brain.models[omi.talker]) || []
     return models.concat([{ value: "__custom__", label: strings.t("settings.custom") }])
   }
+
+  readonly property var workerOptions: (omi.brain && omi.brain.worker_providers) || []
+  readonly property string worker: (omi.brain && omi.brain.worker) || ""
+  readonly property var workerModelOptions: (omi.brain && omi.brain.worker_models && omi.brain.worker_models[worker]) || []
 
   readonly property var fallbackList: (omi.brain && omi.brain.fallbacks) || []
 
@@ -259,7 +268,9 @@ Panel {
     open: root.opened
     focusTarget: omi.confirm || !omi.connected ? keyCatcher : input
     contentWidth: panel.fittedContentWidth(Style.space(380))
-    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(620))
+    // Settings grow into the screen's spare height so there is less to scroll.
+    contentHeight: panel.fittedContentHeight(column.implicitHeight,
+      root.settingsOpen ? Math.max(Style.space(620), Math.round(panel.availableCardHeight * 0.9)) : Style.space(620))
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -603,24 +614,28 @@ Panel {
           objectName: "settingsCard"
           visible: root.settingsOpen && omi.connected
           Layout.fillWidth: true
-          Layout.preferredHeight: Math.min(settingsCol.implicitHeight + Style.space(18), Style.space(340))
+          Layout.preferredHeight: Math.min(settingsCol.implicitHeight + Style.space(18),
+            Math.max(Style.space(340), Math.round(panel.availableCardHeight * 0.55)))
           implicitHeight: Layout.preferredHeight
           color: "transparent"
           borderSpec: Border.controlSpec("normal", root.dim, Commons.Color.popups.border)
           radius: Style.cornerRadius
 
           Flickable {
+            id: settingsFlick
             anchors.fill: parent
             anchors.margins: Style.space(9)
             clip: true
             contentWidth: width
             contentHeight: settingsCol.implicitHeight
             boundsBehavior: Flickable.StopAtBounds
-            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+            ScrollBar.vertical: ScrollBar { id: settingsScroll; policy: ScrollBar.AsNeeded }
 
             ColumnLayout {
               id: settingsCol
-              width: parent.width
+              // Leave a lane for the scrollbar so it never sits on top of the controls.
+              width: settingsFlick.width
+                - (settingsFlick.contentHeight > settingsFlick.height ? settingsScroll.width + Style.space(6) : 0)
               spacing: Style.space(8)
 
               // ---- Brain: who answers, which model, and backups ------------
@@ -634,24 +649,42 @@ Panel {
                 font.letterSpacing: 0.8
               }
 
+              // A refused switch leaves the daemon on the old provider and model, so
+              // the dropdowns go back to what is really in use.
+              Connections {
+                target: omi
+                function onNoticeChanged() {
+                  if (omi.notice === "") return
+                  providerDropdown.value = providerDropdown.bound
+                  modelDropdown.value = modelDropdown.bound
+                }
+              }
+
               Dropdown {
+                id: providerDropdown
                 objectName: "providerDropdown"
                 Layout.fillWidth: true
                 label: strings.t("settings.provider")
                 fontFamily: root.fontFamily
+                background: root.dropdownBackground
                 options: root.providerOptions
                 readonly property string bound: omi.talker
                 value: bound
                 onBoundChanged: value = bound
-                onChanged: function(v) { omi.setProvider(v) }
+                onChanged: function(v) {
+                  root.customModel = false
+                  omi.setProvider(v)
+                }
                 Accessible.name: strings.t("settings.provider")
               }
 
               Dropdown {
+                id: modelDropdown
                 objectName: "modelDropdown"
                 Layout.fillWidth: true
                 label: strings.t("settings.model")
                 fontFamily: root.fontFamily
+                background: root.dropdownBackground
                 options: root.modelOptions
                 readonly property string bound: root.customModel ? "__custom__" : omi.currentModel()
                 value: bound
@@ -748,6 +781,7 @@ Panel {
                 Layout.fillWidth: true
                 showLabel: false
                 fontFamily: root.fontFamily
+                background: root.dropdownBackground
                 options: [{ value: "", label: strings.t("settings.add_backup") }].concat(root.backupChoices)
                 value: ""
                 onChanged: function(v) {
@@ -755,6 +789,49 @@ Panel {
                   value = ""
                 }
                 Accessible.name: strings.t("settings.add_backup")
+              }
+
+              PanelSeparator { Layout.fillWidth: true; foreground: root.foreground }
+
+              // ---- Worker: who does long jobs in the background ------------
+              Text {
+                textFormat: Text.PlainText
+                text: strings.t("settings.worker_section").toUpperCase()
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+                font.letterSpacing: 0.8
+              }
+
+              Dropdown {
+                objectName: "workerDropdown"
+                visible: root.workerOptions.length > 0
+                Layout.fillWidth: true
+                label: strings.t("settings.worker")
+                fontFamily: root.fontFamily
+                background: root.dropdownBackground
+                options: root.workerOptions
+                readonly property string bound: root.worker
+                value: bound
+                onBoundChanged: value = bound
+                onChanged: function(v) { if (v !== root.worker) omi.setSetting("brain.worker", v) }
+                Accessible.name: strings.t("settings.worker")
+              }
+
+              Dropdown {
+                objectName: "workerModelDropdown"
+                visible: root.worker !== "" && root.worker !== "off" && root.workerModelOptions.length > 0
+                Layout.fillWidth: true
+                label: strings.t("settings.worker_model")
+                fontFamily: root.fontFamily
+                background: root.dropdownBackground
+                options: root.workerModelOptions
+                readonly property string bound: (omi.brain && omi.brain.worker_model) || ""
+                value: bound
+                onBoundChanged: value = bound
+                onChanged: function(v) { if (v !== bound) omi.setSetting("brain.worker_model", v) }
+                Accessible.name: strings.t("settings.worker_model")
               }
 
               PanelSeparator { Layout.fillWidth: true; foreground: root.foreground }
@@ -775,6 +852,7 @@ Panel {
                 Layout.fillWidth: true
                 label: strings.t("settings.stt")
                 fontFamily: root.fontFamily
+                background: root.dropdownBackground
                 options: root.engineOptions(omi.sttEngines, omi.sttEngine)
                 readonly property string bound: omi.sttEngine
                 value: bound
@@ -788,6 +866,7 @@ Panel {
                 Layout.fillWidth: true
                 label: strings.t("settings.tts")
                 fontFamily: root.fontFamily
+                background: root.dropdownBackground
                 options: root.engineOptions(omi.ttsEngines, omi.ttsEngine)
                 readonly property string bound: omi.ttsEngine
                 value: bound
@@ -802,6 +881,7 @@ Panel {
                 Layout.fillWidth: true
                 label: strings.t("settings.voice")
                 fontFamily: root.fontFamily
+                background: root.dropdownBackground
                 options: (omi.voices || []).map(function(v) { return { value: v, label: root.voiceLabel(v) } })
                 readonly property string bound: omi.voice
                 value: bound
@@ -815,6 +895,7 @@ Panel {
                 Layout.fillWidth: true
                 label: strings.t("settings.speed")
                 fontFamily: root.fontFamily
+                background: root.dropdownBackground
                 options: [0.9, 1.0, 1.15, 1.3].map(function(v) { return { value: String(v), label: root.speedLabel(v) } })
                 readonly property string bound: String(Math.round(omi.ttsSpeed * 100) / 100)
                 value: bound
@@ -841,6 +922,7 @@ Panel {
                 Layout.fillWidth: true
                 label: strings.t("settings.call_mode")
                 fontFamily: root.fontFamily
+                background: root.dropdownBackground
                 options: ["auto", "continuous", "single"].map(function(v) { return { value: v, label: root.callModeLabel(v) } })
                 readonly property string bound: omi.wakeCallMode
                 value: bound
@@ -854,6 +936,7 @@ Panel {
                 Layout.fillWidth: true
                 label: strings.t("settings.sensitivity")
                 fontFamily: root.fontFamily
+                background: root.dropdownBackground
                 options: ["low", "medium", "high"].map(function(v) { return { value: v, label: root.sensitivityLabel(v) } })
                 readonly property string bound: omi.wakeSensitivity
                 value: bound

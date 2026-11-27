@@ -14,6 +14,7 @@ Item {
   property Item focusTarget: null
   property int contentWidth: 280
   property int contentHeight: 200
+  property real availableCardHeight: 0
   default property alias contentItem: holder.children
 
   function fittedContentWidth(width, cap) { return Math.round(cap > 0 ? Math.min(width, cap) : width) }

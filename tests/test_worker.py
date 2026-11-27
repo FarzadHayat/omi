@@ -13,7 +13,8 @@ from omi.brain import create_worker
 from omi.brain.claude_session import omi_mcp_available
 from omi.config import Config
 from omi.events import WorkerDone, WorkerProgress
-from omi.worker import ClaudeWorker, delegate_tool, progress_phrase
+from omi.worker import ClaudeWorker, SwitchableWorker, delegate_tool, progress_phrase
+from tests.fakes import FakeWorker
 
 
 async def next_events(worker: ClaudeWorker, until_done: int = 1, timeout: float = 10) -> list:
@@ -105,3 +106,32 @@ async def test_live_worker_tiny_job():
     done = events[-1]
     assert done.job_id == job and done.ok
     assert "4" in done.summary or "four" in done.summary.lower()
+
+
+async def test_switchable_worker_hands_over_and_stops_open_jobs():
+    first, second = FakeWorker(), FakeWorker()
+    w = SwitchableWorker(first)
+    await w.start()
+    gen = w.events()
+    done_id = await w.submit("finishes")
+    open_id = await w.submit("still running")
+    first.push(WorkerDone(done_id, True, "Done."))
+    assert (await asyncio.wait_for(anext(gen), 1)).summary == "Done."
+    await w.swap(second)
+    assert first.closed
+    stopped = await asyncio.wait_for(anext(gen), 1)
+    assert stopped.job_id == open_id and not stopped.ok
+    await w.submit("new job")
+    assert second.submitted == ["new job"]
+    second.push(WorkerProgress("x", "Reading files"))
+    assert (await asyncio.wait_for(anext(gen), 1)).text == "Reading files"
+    await w.close()
+    assert second.closed
+
+
+async def test_delegate_when_the_worker_is_off():
+    w = SwitchableWorker(FakeWorker())
+    await w.swap(None)
+    assert not w.active
+    res = await delegate_tool(w).fn(task="anything")
+    assert not res.ok and "off" in res.text

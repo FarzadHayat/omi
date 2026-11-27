@@ -11,6 +11,7 @@ desktop.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import shutil
@@ -125,21 +126,42 @@ def local_options(cfg: Config) -> tuple[list[dict[str, Any]], str]:
     return options, best
 
 
-def _load_cli_models(provider: str) -> list[dict[str, str]]:
-    if provider != "opencode" or shutil.which("opencode") is None:
-        return []
+def _run(argv: list[str]) -> str:
     try:
-        out = subprocess.run(["opencode", "models"], capture_output=True, text=True, timeout=20).stdout
+        return subprocess.run(argv, capture_output=True, text=True, timeout=20).stdout
     except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def _load_cli_models(provider: str) -> list[dict[str, str]]:
+    if shutil.which(provider) is None:
         return []
-    names = [ln.strip() for ln in out.splitlines() if ln.strip()]
-    free = [n for n in names if n.endswith("-free") or n == "opencode/big-pickle"]
-    return [{"value": n, "label": n.replace("opencode-go/", "go: ").replace("opencode/", "") + " · free"} for n in free]
+    if provider == "opencode":
+        names = [ln.strip() for ln in _run(["opencode", "models"]).splitlines() if ln.strip()]
+        free = [n for n in names if n.endswith("-free") or n == "opencode/big-pickle"]
+        return [{"value": n, "label": n.replace("opencode-go/", "go: ").replace("opencode/", "") + " · free"}
+                for n in free]
+    if provider == "codex":
+        try:
+            models = json.loads(_run(["codex", "debug", "models"]) or "{}").get("models") or []
+        except (ValueError, AttributeError):
+            return []
+        listed = sorted((m for m in models if isinstance(m, dict) and m.get("visibility") == "list" and m.get("slug")),
+                        key=lambda m: m.get("priority") or 0)
+        return [{"value": m["slug"], "label": m.get("display_name") or m["slug"]} for m in listed]
+    if provider == "agy":
+        out = []
+        for line in _run(["agy", "models"]).splitlines():
+            value, _, label = line.partition("\t")
+            if value.strip() and label.strip():
+                out.append({"value": value.strip(), "label": label.strip()})
+        return out
+    return []
 
 
 def load_cli_models() -> None:
-    """Fill the CLI model lists (OpenCode takes a few seconds, so run it in a thread)."""
-    for provider in ("opencode",):
+    """Fill the CLI model lists (each CLI takes a few seconds, so run it in a thread)."""
+    for provider in ("opencode", "codex", "agy"):
         models = _load_cli_models(provider)
         with _cli_lock:
             _cli_cache[provider] = models
@@ -159,6 +181,38 @@ def model_options(cfg: Config, provider: str) -> list[dict[str, str]]:
     if current and not any(o["value"] == current for o in options):
         options.append({"value": current, "label": current})
     return options
+
+
+def worker_model_options(cfg: Config, provider: str) -> list[dict[str, str]]:
+    if provider == "claude":
+        options = list(CLAUDE_MODELS)
+        current = cfg.brain.claude.worker_model
+    else:
+        pcfg = getattr(cfg.brain, provider, None)
+        current = getattr(pcfg, "worker_model", "") if pcfg is not None else ""
+        with _cli_lock:
+            # An empty worker model runs the provider's own model setting, else the CLI default.
+            options = [{"value": "", "label": "Default"}, *_cli_cache.get(provider, [])]
+    if current and not any(o["value"] == current for o in options):
+        options.append({"value": current, "label": current})
+    return options
+
+
+def worker_catalog(cfg: Config, installed: set[str]) -> dict[str, Any]:
+    """The background worker's choices: installed cloud providers, or off."""
+    from omi.brain.cli_providers import resolve_provider
+
+    providers = [{"value": name, "label": label} for name, (label, kind) in PROVIDERS.items()
+                 if name in installed and kind == "cloud"]
+    providers.append({"value": "off", "label": "Off"})
+    worker = resolve_provider(cfg.brain.worker, role="worker")
+    models = {p["value"]: worker_model_options(cfg, p["value"]) for p in providers if p["value"] != "off"}
+    current = ""
+    if worker == "claude":
+        current = cfg.brain.claude.worker_model
+    elif worker != "off":
+        current = getattr(getattr(cfg.brain, worker, None), "worker_model", "")
+    return {"worker_providers": providers, "worker": worker, "worker_model": current, "worker_models": models}
 
 
 def brain_catalog(cfg: Config, installed: set[str]) -> dict[str, Any]:

@@ -266,6 +266,36 @@ async def test_status_and_set(daemon):
     assert "live" in (await call(daemon, {"cmd": "set", "key": "tts.engine", "value": "kokoro"}))[-1]["error"]
 
 
+async def test_set_worker_swaps_it_live(sock_dir):
+    from omi.worker import SwitchableWorker
+
+    first = FakeWorker()
+    d = make_daemon(sock_dir, worker=SwitchableWorker(first))
+    made = []
+
+    async def new_worker(value):
+        made.append(value)
+        return None if value == "off" else FakeWorker()
+
+    d.factories["brain.worker"] = new_worker
+    await d.start()
+    try:
+        assert (await call(d, {"cmd": "set", "key": "brain.worker", "value": "codex"}))[-1]["ok"]
+        assert first.closed and d.cfg.brain.worker == "codex"
+        st = (await call(d, {"cmd": "status"}))[-1]
+        assert st["worker"] == "codex" and st["brain"]["worker"] == "codex"
+        assert (await call(d, {"cmd": "set", "key": "brain.worker", "value": "off"}))[-1]["ok"]
+        assert (await call(d, {"cmd": "status"}))[-1]["worker"] == "off"
+        assert made == ["codex", "off"]
+    finally:
+        await d.close()
+
+
+async def test_worker_cannot_be_set_without_a_switchable_worker(daemon):
+    daemon.factories["brain.worker"] = lambda v: None
+    assert "live" in (await call(daemon, {"cmd": "set", "key": "brain.worker", "value": "codex"}))[-1]["error"]
+
+
 async def test_subscribe_fan_out(daemon):
     subs = [await Client.open(daemon) for _ in range(2)]
     for s in subs:

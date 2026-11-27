@@ -49,6 +49,8 @@ SETTABLE = {
     "brain.model": "brain",
     "brain.fallbacks": "brain",
     "brain.local_model": "brain",
+    "brain.worker": "worker",
+    "brain.worker_model": "worker",
     "tts.engine": "tts",
     "tts.voice": "tts",
     "stt.engine": "stt",
@@ -572,7 +574,7 @@ class Daemon:
             "ready": self.ready.is_set(),
             "talker": talker,
             "talker_model": talker_model,
-            "worker": self.cfg.brain.worker if s.worker is not None else "off",
+            "worker": self.cfg.brain.worker if getattr(s.worker, "active", s.worker is not None) else "off",
             "brain": self._brain_info(),
             "providers": [
                 {"name": p["name"], "installed": p["installed"], "model": p["model"]}
@@ -648,12 +650,13 @@ class Daemon:
         }
 
     def _brain_info(self) -> dict[str, Any]:
-        from omi.brain.catalog import brain_catalog
+        from omi.brain.catalog import brain_catalog, worker_catalog
         from omi.brain.cli_providers import available_providers
 
         installed = {p["name"] for p in available_providers(self.cfg) if p["installed"]}
         brain = self.session.brain
         info = brain_catalog(self.cfg, installed)
+        info.update(worker_catalog(self.cfg, installed))
         info.update({
             "talker": self.cfg.brain.talker,
             "model": self._active_model(self.cfg.brain.talker),
@@ -767,9 +770,11 @@ class Daemon:
             all_keys = (*SETTABLE, "tts.speed", "audio.sounds", "wake.enabled",
                         "wake.call_mode", "wake.conversational", "wake.sensitivity")
             raise RequestError(f"cannot set {key}; settable: {', '.join(all_keys)}")
-        if not isinstance(value, str) or (not value and key not in ("brain.fallbacks", "brain.model")):
+        if not isinstance(value, str) or (not value and key not in ("brain.fallbacks", "brain.model", "brain.worker_model")):
             raise RequestError("set needs a string value")
         factory = self.factories.get(key)
+        if SETTABLE[key] == "worker" and not hasattr(self.session.worker, "swap"):
+            factory = None
         if factory is None:
             raise RequestError(f"{key} cannot be changed live")
         try:
@@ -780,7 +785,10 @@ class Daemon:
         old = getattr(self.session, attr)
         if attr == "brain":
             await self.session.stop()  # never swap a brain out from under a running turn
-        setattr(self.session, attr, new)
+        if attr == "worker":
+            await old.swap(new)  # the session keeps one worker; only what runs inside changes
+        else:
+            setattr(self.session, attr, new)
         if attr == "brain":
             asyncio.ensure_future(_quietly(old.close()))
         if key == "tts.voice":
@@ -799,6 +807,15 @@ class Daemon:
             resolved = getattr(new, "name", value) if value in ("auto", "openai") else value
             self.cfg.brain.talker = resolved
             self._persist("brain", "talker", resolved, save)
+        elif key == "brain.worker":
+            self.cfg.brain.worker = value
+            self._persist("brain", "worker", value, save)
+        elif key == "brain.worker_model":
+            from omi.brain.cli_providers import resolve_provider
+
+            provider = resolve_provider(self.cfg.brain.worker, role="worker")
+            getattr(self.cfg.brain, provider).worker_model = value
+            self._persist(f"brain.{provider}", "worker_model", value, save)
         elif key == "brain.local_model":
             self.cfg.brain.local.model = os.path.expanduser(value)
             self._persist("brain.local", "model", self.cfg.brain.local.model, save)
