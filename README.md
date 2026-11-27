@@ -4,6 +4,8 @@
 
 A local-first voice assistant and animated on-screen companion for Omarchy & Hyprland, with desktop, browser, terminal, and T3 Code control.
 
+![Omi](docs/cover.jpg)
+
 ## Features
 
 - **Fast voice loop + conversational wake word**: Always-on **"Hey Omi"** / **"Okay Omi"** wake word (`sherpa-onnx` 3.3M streaming keyword spotter + Silero VAD, ~1.7% CPU, toggleable live) with continuous phone-call conversation mode (keeps listening after every reply until you say *"goodbye"* / *"see ya"* / *"that's all"* or pause for 12 s), streaming local STT (`nemotron` or `moonshine`), and neural local TTS (`kokoro` v1.0 or `piper`).
@@ -18,10 +20,6 @@ A local-first voice assistant and animated on-screen companion for Omarchy & Hyp
 - **Model-agnostic & subscription-first**: Works with your existing AI CLI subscriptions (no API keys needed) — **Claude Code** (`claude`), **OpenCode** (`opencode`, free models / Copilot / multi-provider subs), **Codex** (`codex`, ChatGPT Plus/Pro), **Antigravity** (`agy`, Google AI Pro/Ultra), **Gemini CLI** (`gemini`), or any **local / OpenAI-compatible** endpoint (`llama-server`, Ollama, LM Studio, OpenRouter, xAI/Grok). Switch providers or models live with `omi set brain.talker <provider>` and `omi set brain.model <model>`.
 - **Persistent compacting memory**: Markdown facts + rolling session digests + SQLite FTS5 search, with optional read-only shared memory directory (e.g. an Obsidian/Syncthing folder).
 - **Private mobile/tablet web UI**: Optional local web PWA served on `127.0.0.1:47911` for private access via `tailscale serve`.
-
-## Screenshot
-
-![Omi on Omarchy](docs/screenshot.png)
 
 ## Keybindings
 
