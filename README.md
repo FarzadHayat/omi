@@ -50,7 +50,7 @@ _Screenshot coming soon._
 ## Quickstart
 
 ```bash
-git clone <repo-url> omi
+git clone https://github.com/FarzadHayat/omi.git
 cd omi
 uv sync
 ```
