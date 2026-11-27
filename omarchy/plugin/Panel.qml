@@ -630,8 +630,9 @@ Panel {
                 }
               }
 
-              // Voice selector
+              // Voice selector (Kokoro presets only)
               RowLayout {
+                visible: omi.ttsEngine === "kokoro"
                 Layout.fillWidth: true
                 spacing: Style.space(8)
 
