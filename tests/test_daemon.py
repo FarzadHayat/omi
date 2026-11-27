@@ -14,11 +14,11 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from hark import cli
-from hark.config import Config
-from hark.daemon import Daemon
-from hark.events import TextDelta, TurnDone
-from hark.session import Session
+from omi import cli
+from omi.config import Config
+from omi.daemon import Daemon
+from omi.events import TextDelta, TurnDone
+from omi.session import Session
 from tests.fakes import (
     CaptureOut,
     FakeAudioIn,
@@ -70,7 +70,7 @@ def make_daemon(sock_dir, brain=None, **kw):
         audio_in=FakeAudioIn(),
         factories={"brain.talker": new_brain},
         wav_out=FakeWavOut,
-        socket_path=sock_dir / "run" / "hark.sock",
+        socket_path=sock_dir / "run" / "omi.sock",
         **kw,
     )
     d.out = out
@@ -393,7 +393,7 @@ async def test_tool_command_runs_daemon_tools(daemon):
 
 
 async def test_mcp_server_proxies_daemon_tools(daemon, monkeypatch):
-    from hark.tools import mcp_server
+    from omi.tools import mcp_server
 
     monkeypatch.setattr(mcp_server.config, "SOCKET_PATH", daemon.socket_path)
     tools = {t.name: t for t in mcp_server.daemon_tools()}
@@ -452,7 +452,7 @@ async def test_stale_confirm_id_does_not_approve_a_newer_question(daemon):
 
 
 async def test_subscriber_that_stops_reading_never_blocks_turns(sock_dir, monkeypatch):
-    from hark import daemon as daemon_mod
+    from omi import daemon as daemon_mod
 
     monkeypatch.setattr(daemon_mod, "OUTBOX_LIMIT", 50)
     brain = FakeBrain(lambda t: [(0.0, TextDelta("word " * 2000)), (0.0, TurnDone())])
@@ -575,7 +575,7 @@ async def test_ptt_feeds_chunks_while_recording(sock_dir):
 
 
 async def test_shutdown_runs_the_memory_job_bounded(sock_dir, monkeypatch):
-    from hark import daemon as daemon_mod
+    from omi import daemon as daemon_mod
 
     monkeypatch.setattr(daemon_mod, "SHUTDOWN_JOB_S", 0.3)
     d = make_daemon(sock_dir)
@@ -610,7 +610,7 @@ async def test_shutdown_runs_the_memory_job_bounded(sock_dir, monkeypatch):
 
 
 async def test_idle_job_waits_for_quiet_and_yields_to_turns(sock_dir, monkeypatch):
-    from hark import daemon as daemon_mod
+    from omi import daemon as daemon_mod
 
     monkeypatch.setattr(daemon_mod, "IDLE_JOB_GRACE_S", 0.05)
     monkeypatch.setattr(daemon_mod, "IDLE_POLL_S", 0.01)

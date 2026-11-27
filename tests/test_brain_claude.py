@@ -12,10 +12,10 @@ from pathlib import Path
 
 import pytest
 
-from hark.brain import claude_session
-from hark.brain.claude import ClaudeBrain
-from hark.config import Config
-from hark.events import TextDelta, ToolEnd, ToolStart, TurnContext, TurnDone
+from omi.brain import claude_session
+from omi.brain.claude import ClaudeBrain
+from omi.config import Config
+from omi.events import TextDelta, ToolEnd, ToolStart, TurnContext, TurnDone
 
 FAKE_CLAUDE = r'''
 import json, os, sys, threading, time
@@ -67,7 +67,7 @@ def turn(content):
         return
     if "tool" in content:
         for i in range(3):
-            tool_use(f"t{i}", "mcp__hark__set_volume" if i == 0 else "Bash", {"percent": 30})
+            tool_use(f"t{i}", "mcp__omi__set_volume" if i == 0 else "Bash", {"percent": 30})
             tool_result(f"t{i}", [{"type": "text", "text": "Volume is 30 percent."}])
         delta("Done.")
         out({"type": "stream_event", "event": {"type": "message_stop"}})
@@ -102,7 +102,7 @@ def fake_claude(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[list[s
     script.write_text(FAKE_CLAUDE)
     log = tmp_path / "claude.log"
     monkeypatch.setenv("FAKE_CLAUDE_LOG", str(log))
-    monkeypatch.setenv("HARK_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("OMI_STATE_DIR", str(tmp_path))
     return [sys.executable, str(script)], log
 
 
@@ -134,9 +134,9 @@ async def test_chat_turn_streams_clean_text(fake_claude):
 def test_command_with_mcp_uses_approve_tool():
     session = claude_session.ClaudeSession("haiku", "x", use_mcp=True)
     cmd = session.command()
-    assert cmd[cmd.index("--permission-prompt-tool") + 1] == "mcp__hark__approve"
-    server = json.loads(cmd[cmd.index("--mcp-config") + 1])["mcpServers"]["hark"]
-    assert server["args"][-2:] == ["-m", "hark.tools.mcp_server"]
+    assert cmd[cmd.index("--permission-prompt-tool") + 1] == "mcp__omi__approve"
+    server = json.loads(cmd[cmd.index("--mcp-config") + 1])["mcpServers"]["omi"]
+    assert server["args"][-2:] == ["-m", "omi.tools.mcp_server"]
     assert "--strict-mcp-config" in cmd and "--dangerously-skip-permissions" not in cmd
 
 
@@ -241,8 +241,8 @@ LIVE_CMD = shutil.which("claude")
 @pytest.mark.live
 @pytest.mark.skipif(LIVE_CMD is None, reason="claude CLI not installed")
 async def test_live_claude_chat_warm_and_interrupt(tmp_path, monkeypatch):
-    monkeypatch.setenv("HARK_STATE_DIR", str(tmp_path))
-    brain = ClaudeBrain(Config(), use_mcp=claude_session.hark_mcp_available())
+    monkeypatch.setenv("OMI_STATE_DIR", str(tmp_path))
+    brain = ClaudeBrain(Config(), use_mcp=claude_session.omi_mcp_available())
     t0 = time.perf_counter()
     await brain.start()
     startup = time.perf_counter() - t0
@@ -335,7 +335,7 @@ async def test_close_while_starting_leaves_no_process(fake_claude):
 
 def test_talker_runs_at_low_effort_and_other_sessions_keep_the_default(tmp_path, monkeypatch):
     # Haiku's adaptive thinking held back the first word on garbled transcripts.
-    monkeypatch.setenv("HARK_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("OMI_STATE_DIR", str(tmp_path))
     cmd = ClaudeBrain(Config(), use_mcp=False).session.command()
     assert cmd[cmd.index("--effort") + 1] == "low"
     assert "--effort" not in claude_session.ClaudeSession("haiku", "x", use_mcp=False).command()

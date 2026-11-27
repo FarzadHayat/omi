@@ -6,9 +6,9 @@ import time
 import numpy as np
 import pytest
 
-from hark.events import State, TextDelta, ToolEnd, ToolStart, TurnDone, WorkerDone, WorkerProgress
-from hark.memory.base import Hit
-from hark.session import CANCELLED_NOTE, HISTORY_LIMIT, NO_AUDIO, Session, parse_answer, parse_yes_no, spoken_error
+from omi.events import State, TextDelta, ToolEnd, ToolStart, TurnDone, WorkerDone, WorkerProgress
+from omi.memory.base import Hit
+from omi.session import CANCELLED_NOTE, HISTORY_LIMIT, NO_AUDIO, Session, parse_answer, parse_yes_no, spoken_error
 from tests.fakes import (
     CaptureOut,
     Events,

@@ -13,12 +13,12 @@ from pathlib import Path
 
 import pytest
 
-from hark import brain, config
-from hark.brain import cli_providers as cp
-from hark.daemon import Daemon
-from hark.events import TextDelta, ToolEnd, ToolStart, TurnContext, TurnDone, WorkerDone, WorkerProgress
-from hark.session import Session
-from hark.tools.base import ToolRegistry
+from omi import brain, config
+from omi.brain import cli_providers as cp
+from omi.daemon import Daemon
+from omi.events import TextDelta, ToolEnd, ToolStart, TurnContext, TurnDone, WorkerDone, WorkerProgress
+from omi.session import Session
+from omi.tools.base import ToolRegistry
 from tests.fakes import CaptureOut, FakeBrain, FakeSTT, FakeTTS
 
 
@@ -28,7 +28,7 @@ def test_build_cli_invocations():
     assert "--model" in argv and "opencode/deepseek-v4.1-flash-free" in argv
     assert "--session" in argv and "ses_1" in argv and argv[-1] == "hi"
     mcp = json.loads(env["OPENCODE_CONFIG_CONTENT"])
-    assert mcp["mcp"]["omi"]["type"] == "local" and "hark.tools.mcp_server" in mcp["mcp"]["omi"]["command"]
+    assert mcp["mcp"]["omi"]["type"] == "local" and "omi.tools.mcp_server" in mcp["mcp"]["omi"]["command"]
 
     argv, env = cp.build_cli_invocation("codex", "hi", model="gpt-5-mini")
     assert argv[:4] == ["codex", "exec", "--json", "--skip-git-repo-check"]
@@ -51,11 +51,11 @@ def test_parse_cli_events():
     ev = cp.parse_cli_event("opencode", {"type": "text", "sessionID": "ses_1", "part": {"text": "Hello"}})
     assert ev.session_id == "ses_1" and ev.text == "Hello"
     ev = cp.parse_cli_event("opencode", {"type": "tool_use", "part": {
-        "callID": "c1", "tool": "mcp__hark__volume", "state": {"status": "running", "input": {"action": "up"}},
+        "callID": "c1", "tool": "mcp__omi__volume", "state": {"status": "running", "input": {"action": "up"}},
     }})
     assert ev.tool_start == ("c1", "volume", {"action": "up"})
     ev = cp.parse_cli_event("opencode", {"type": "tool_use", "part": {
-        "callID": "c1", "tool": "mcp__hark__volume", "state": {"status": "completed", "output": "Done."},
+        "callID": "c1", "tool": "mcp__omi__volume", "state": {"status": "completed", "output": "Done."},
     }})
     assert ev.tool_end == ("c1", "volume", True, "Done.")
 
@@ -142,7 +142,7 @@ async def test_cli_worker_runs_job_and_narrates(tmp_path):
         """
 import json
 print(json.dumps({"type": "thread.started", "thread_id": "thr_1"}), flush=True)
-print(json.dumps({"type": "item.started", "item": {"id": "c1", "type": "mcp_tool_call", "tool": "mcp__hark__terminal_read"}}), flush=True)
+print(json.dumps({"type": "item.started", "item": {"id": "c1", "type": "mcp_tool_call", "tool": "mcp__omi__terminal_read"}}), flush=True)
 print(json.dumps({"type": "item.completed", "item": {"id": "m1", "type": "agent_message", "text": "All tests pass."}}), flush=True)
 """,
     )

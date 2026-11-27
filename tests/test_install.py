@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from hark import cli, install
-from hark.install import BEGIN, END, InstallError, Paths
+from omi import cli, install
+from omi.install import BEGIN, END, InstallError, Paths
 
 OMI = Path("/opt/omi/.venv/bin/omi")
 ORIGINAL = '-- my keys\no.bind("SUPER + B", "Browser", { launch = "chromium" })\n'
@@ -83,30 +83,6 @@ def test_install_writes_widget_unit_and_one_keys_block(home):
     assert (stamp / ".config/hypr/bindings.lua").read_text() == ORIGINAL
     assert not (stamp / ".config/omarchy").exists()
     assert any("keys added" in c for c in report.changed)
-
-
-def test_install_migrates_legacy_hark_install(home):
-    paths = Paths(home)
-    paths.legacy_unit.parent.mkdir(parents=True, exist_ok=True)
-    paths.legacy_unit.write_text(install.LEGACY_UNIT_MARK + "\n[Service]\nExecStart=/old/hark daemon\n")
-    paths.legacy_plugin.mkdir(parents=True, exist_ok=True)
-    (paths.legacy_plugin / "manifest.json").write_text('{"id": "hark"}')
-    paths.bindings.write_text(
-        ORIGINAL + "\n" + install.LEGACY_BEGIN + '\no.bind("SUPER + ALT + H", "Hark", "x")\n' + install.LEGACY_END + "\n"
-    )
-    paths.shell_json.parent.mkdir(parents=True, exist_ok=True)
-    paths.shell_json.write_text(json.dumps({"version": 1, "bar": {"layout": {"right": [{"id": "hark"}]}}}))
-
-    run = FakeRun()
-    report = install.install(home, OMI, run=run)
-    assert report.problems == []
-    assert not paths.legacy_unit.exists()
-    assert not paths.legacy_plugin.exists()
-    assert install.LEGACY_BEGIN not in paths.bindings.read_text()
-    assert BEGIN in paths.bindings.read_text()
-    assert run.ran("systemctl", "--user", "disable", "--now", "hark.service")
-    assert run.ran("omarchy", "plugin", "disable", "hark")
-    assert run.ran("omarchy", "plugin", "enable", "omi")
 
 
 def test_install_twice_changes_nothing(home):
@@ -280,7 +256,6 @@ def test_uninstall_turns_everything_off(home):
 def test_cli_install_and_uninstall(home, monkeypatch, capsys):
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setattr(install, "omi_binary", lambda: OMI)
-    monkeypatch.setattr(install, "hark_binary", lambda: OMI)
 
     assert cli.main(["install", "--no-activate"]) == 0
     assert "keys added" in capsys.readouterr().out
@@ -292,7 +267,7 @@ def test_cli_install_and_uninstall(home, monkeypatch, capsys):
 
 def test_omi_binary_is_the_running_environments():
     exe = install.omi_binary()
-    assert exe.name in ("omi", "hark") and os.access(exe, os.X_OK)
+    assert exe.name in ("omi", "omi") and os.access(exe, os.X_OK)
 
 
 @pytest.mark.skipif(shutil.which("omarchy") is None, reason="needs the omarchy command")

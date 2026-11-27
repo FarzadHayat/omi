@@ -11,12 +11,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from hark import config
-from hark.audio import wake
-from hark.daemon import Daemon
-from hark.events import State, TextDelta, TurnDone
-from hark.session import Session
-from hark.tools.base import ToolRegistry
+from omi import config
+from omi.audio import wake
+from omi.daemon import Daemon
+from omi.events import State, TextDelta, TurnDone
+from omi.session import Session
+from omi.tools.base import ToolRegistry
 from tests.fakes import CaptureOut, FakeBrain, FakeSTT, FakeTTS
 
 
@@ -37,7 +37,7 @@ def test_encode_phrase_and_keywords_text(tmp_path):
 
 
 def test_wake_chime_pcm():
-    from hark.audio import sfx
+    from omi.audio import sfx
 
     for name in sfx.SOUNDS:
         pcm = sfx.render(name, 16000)
@@ -50,7 +50,7 @@ def test_wake_chime_pcm():
 
 @pytest.mark.asyncio
 async def test_session_plays_heard_and_acting_sfx(tmp_path):
-    from hark.events import ToolEnd, ToolStart
+    from omi.events import ToolEnd, ToolStart
 
     played: list[str] = []
     session = Session(
@@ -81,7 +81,7 @@ async def test_session_plays_heard_and_acting_sfx(tmp_path):
 
 
 def test_is_goodbye_and_router_goodbye():
-    from hark import router
+    from omi import router
 
     for yes in ("goodbye", "Bye!", "see ya", "See you later.", "thanks omi, that's all",
                 "I'm done", "hang up", "stop listening", "go to sleep", "never mind"):
@@ -117,7 +117,7 @@ def test_wake_detector_real_model_hey_omi():
     cfg = config.WakeConfig()
     if not all((Path(cfg.model_dir) / f).is_file() for f in wake.MODEL_FILES):
         pytest.skip("KWS model not installed")
-    from hark import tts
+    from omi import tts
 
     eng = tts.create(config.TtsConfig(engine="kokoro", kokoro_voice="af_heart"))
 
@@ -352,7 +352,7 @@ class _MultiTurnSTT:
 
 @pytest.mark.asyncio
 async def test_conversational_mode_continues_until_goodbye(tmp_path):
-    from hark import router
+    from omi import router
 
     events: list[dict] = []
 

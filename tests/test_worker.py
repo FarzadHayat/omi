@@ -9,11 +9,11 @@ import time
 import pytest
 from test_brain_claude import fake_claude  # noqa: F401  (fixture)
 
-from hark.brain import create_worker
-from hark.brain.claude_session import hark_mcp_available
-from hark.config import Config
-from hark.events import WorkerDone, WorkerProgress
-from hark.worker import ClaudeWorker, delegate_tool, progress_phrase
+from omi.brain import create_worker
+from omi.brain.claude_session import omi_mcp_available
+from omi.config import Config
+from omi.events import WorkerDone, WorkerProgress
+from omi.worker import ClaudeWorker, delegate_tool, progress_phrase
 
 
 async def next_events(worker: ClaudeWorker, until_done: int = 1, timeout: float = 10) -> list:
@@ -43,7 +43,7 @@ def test_progress_phrases():
     assert progress_phrase("Bash") == "Running a command"
     assert progress_phrase("WebSearch") == "Searching the web"
     assert progress_phrase("Read") == "Reading files"
-    assert progress_phrase("mcp__hark__set_volume") == "Using the computer"
+    assert progress_phrase("mcp__omi__set_volume") == "Using the computer"
 
 
 async def test_job_reports_rate_limited_progress_and_summary(worker):
@@ -90,7 +90,7 @@ async def test_delegate_tool(worker):
 async def test_live_worker_tiny_job():
     cfg = Config()
     cfg.brain.claude.worker_model = "haiku"
-    w = ClaudeWorker(cfg, use_mcp=hark_mcp_available())
+    w = ClaudeWorker(cfg, use_mcp=omi_mcp_available())
     t0 = time.perf_counter()
     await w.start()
     startup = time.perf_counter() - t0

@@ -14,10 +14,10 @@ import time
 
 import pytest
 
-from hark.config import MemoryConfig
-from hark.memory import FileMemory, NullMemory, create
-from hark.memory.index import build_query
-from hark.memory.jobs import (
+from omi.config import MemoryConfig
+from omi.memory import FileMemory, NullMemory, create
+from omi.memory.index import build_query
+from omi.memory.jobs import (
     apply_ops,
     digest,
     end_session,
@@ -25,8 +25,8 @@ from hark.memory.jobs import (
     parse_ops,
     rebuild_profile,
 )
-from hark.memory.store import parse_frontmatter, slugify
-from hark.memory.tools import memory_tools
+from omi.memory.store import parse_frontmatter, slugify
+from omi.memory.tools import memory_tools
 
 
 def write_shared(folder: pathlib.Path, fname: str, name: str, desc: str, body: str, type_="user"):
@@ -529,7 +529,7 @@ def test_rebuild_profile(mem, cfg):
     assert run(rebuild_profile(mem, fake("nothing"))) == ""  # no facts yet
     mem.save_fact("Likes brevity", "Wants short answers.", "style", "feedback")
     mem.save_fact("Name", "The user is called Sam.", "identity", "user")
-    mem.save_fact("Hark project", "Building a voice assistant.", "project", "project")
+    mem.save_fact("Omi project", "Building a voice assistant.", "project", "project")
     llm = fake("```\n" + "Sam wants short answers. " * 400 + "\n```")
     out = run(rebuild_profile(mem, llm))
     assert 0 < len(out) <= 500 * 4
@@ -603,7 +603,7 @@ def test_end_session_rebuilds_the_profile_when_facts_change(mem, cfg):
 
 
 def test_profile_written_at_startup_only_when_missing(mem, cfg):
-    from hark.memory.jobs import profile_if_missing
+    from omi.memory.jobs import profile_if_missing
 
     llm = fake("Sam likes tea.")
     assert run(profile_if_missing(mem, llm)) == "" and llm.prompts == []  # no facts yet

@@ -8,11 +8,11 @@ from pathlib import Path
 
 import pytest
 
-from hark import config, router
-from hark.daemon import Daemon
-from hark.session import Session
-from hark.tools import dev, gui, safety
-from hark.tools.base import ToolRegistry
+from omi import config, router
+from omi.daemon import Daemon
+from omi.session import Session
+from omi.tools import dev, gui, safety
+from omi.tools.base import ToolRegistry
 from tests.fakes import CaptureOut, FakeBrain, FakeSTT, FakeTTS
 
 
@@ -53,9 +53,9 @@ def test_dev_builders_and_safety():
     assert dev.terminal_command_safety({"command": "git push"}) == "destructive"
     with pytest.raises(ValueError, match="blocked"):
         dev.terminal_command_safety({"command": "cat .env"})
-    assert safety.classify_claude_tool("mcp__hark__terminal_run", {"command": "git status"})[0] == "allow"
-    assert safety.classify_claude_tool("mcp__hark__terminal_run", {"command": "rm -rf build"})[0] == "confirm"
-    assert safety.classify_claude_tool("mcp__hark__terminal_run", {"command": "cat ~/.ssh/id_ed25519"})[0] == "deny"
+    assert safety.classify_claude_tool("mcp__omi__terminal_run", {"command": "git status"})[0] == "allow"
+    assert safety.classify_claude_tool("mcp__omi__terminal_run", {"command": "rm -rf build"})[0] == "confirm"
+    assert safety.classify_claude_tool("mcp__omi__terminal_run", {"command": "cat ~/.ssh/id_ed25519"})[0] == "deny"
 
 
 @pytest.mark.asyncio
@@ -126,7 +126,7 @@ async def test_daemon_mascot_broadcasts_and_live_voice_set(tmp_path):
     sock_dir = Path(tempfile.mkdtemp(prefix="om", dir="/tmp"))
     sock = sock_dir / "omi.sock"
     cfg = config.Config()
-    from hark.events import TextDelta, TurnDone
+    from omi.events import TextDelta, TurnDone
 
     session = Session(
         stt=FakeSTT(),

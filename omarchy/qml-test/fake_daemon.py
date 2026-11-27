@@ -1,6 +1,6 @@
-"""A stand-in hark daemon for the bar widget harness (shell.qml).
+"""A stand-in omi daemon for the bar widget harness (shell.qml).
 
-Usage: fake_daemon.py SOCKET LOG. Speaks hark.protocol on SOCKET, plays a short
+Usage: fake_daemon.py SOCKET LOG. Speaks omi.protocol on SOCKET, plays a short
 event script to subscribers, writes every request it gets to LOG as JSON lines,
 and shuts down (so the widget sees the daemon go) once it has had a say and a stop.
 """

@@ -13,9 +13,9 @@ from typing import Any
 import numpy as np
 import soundfile as sf
 
-from hark.events import BrainEvent, TextDelta, TurnContext, TurnDone, WorkerEvent
-from hark.memory.base import Hit
-from hark.tools.base import Tool, ToolRegistry, ToolResult
+from omi.events import BrainEvent, TextDelta, TurnContext, TurnDone, WorkerEvent
+from omi.memory.base import Hit
+from omi.tools.base import Tool, ToolRegistry, ToolResult
 
 SR = 16000
 

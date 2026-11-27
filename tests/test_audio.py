@@ -12,16 +12,16 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from hark.audio.file import NullOut, WavOut
-from hark.audio.pipewire import PipeWireIn, PipeWireOut
-from hark.audio.vad import EndpointDetector
-from hark.config import SttConfig
-from hark.stt import create as create_stt
+from omi.audio.file import NullOut, WavOut
+from omi.audio.pipewire import PipeWireIn, PipeWireOut
+from omi.audio.vad import EndpointDetector
+from omi.config import SttConfig
+from omi.stt import create as create_stt
 
 from test_speech import REFS, overlap
 
 FIX = Path(__file__).parent / "fixtures"
-SINK = "hark_test"
+SINK = "omi_test"
 
 
 def load(name: str) -> np.ndarray:
@@ -247,7 +247,7 @@ async def test_recording_with_no_microphone_reports_why(no_devices):
 
 
 async def test_turn_with_no_speaker_reports_an_error(no_devices, tmp_path):
-    from hark.session import Session
+    from omi.session import Session
     from tests.fakes import FakeBrain, FakeRouter, FakeSTT, FakeTTS, make_registry
 
     s = Session(stt=FakeSTT(), tts=FakeTTS(), brain=FakeBrain(), registry=make_registry(), router=FakeRouter(),

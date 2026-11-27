@@ -2,7 +2,7 @@ import QtQuick
 
 // Stand-in for qs.Ui KeyboardPanel in the harness. The real one is a layer-shell
 // PanelWindow, which the offscreen platform cannot create; this keeps its API
-// (the properties and helpers the hark panel uses) and hosts the same content.
+// (the properties and helpers the omi panel uses) and hosts the same content.
 Item {
   id: root
 

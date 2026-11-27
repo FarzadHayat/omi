@@ -1,5 +1,5 @@
 [project]
-name = "hark"
+name = "omi"
 version = "0.1.0"
 description = "Fast voice-to-voice assistant that controls your device"
 requires-python = ">=3.12,<3.13"
@@ -14,8 +14,7 @@ dependencies = [
 ]
 
 [project.scripts]
-omi = "hark.cli:main"
-hark = "hark.cli:main"
+omi = "omi.cli:main"
 
 [dependency-groups]
 dev = ["pytest>=8", "pytest-asyncio>=0.24"]

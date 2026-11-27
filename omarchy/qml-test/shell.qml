@@ -1,8 +1,8 @@
 import QtQuick
 import Quickshell
-import "plugin" as Hark
+import "plugin" as Omi
 
-// Harness for the hark bar widget: loads the real plugin against a fake bar and a
+// Harness for the omi bar widget: loads the real plugin against a fake bar and a
 // fake daemon (fake_daemon.py), drives it, and prints one CHECK line per result.
 // Run by tests/test_install.py in a separate quickshell on the offscreen platform,
 // so it never touches the running Omarchy shell or the screen.
@@ -32,7 +32,7 @@ ShellRoot {
     implicitWidth: 120
     implicitHeight: 40
 
-    Hark.Panel {
+    Omi.Panel {
       id: widget
       bar: fakeBar
       width: 40
@@ -55,13 +55,13 @@ ShellRoot {
     return null
   }
 
-  property var hark: widget.service
+  property var omi: widget.service
   property int step: 0
   property var phasesSeen: []
 
   Connections {
-    target: shell.hark
-    function onPhaseChanged() { shell.phasesSeen = shell.phasesSeen.concat([shell.hark.phase]) }
+    target: shell.omi
+    function onPhaseChanged() { shell.phasesSeen = shell.phasesSeen.concat([shell.omi.phase]) }
   }
 
   // The fake daemon plays its script as soon as the widget subscribes; each step
@@ -71,7 +71,7 @@ ShellRoot {
     repeat: true
     running: true
     onTriggered: {
-      var h = shell.hark
+      var h = shell.omi
       if (shell.step === 0 && h.confirm !== null) {
         shell.check("connected", h.connected)
         shell.check("phases", ["listening", "thinking", "speaking", "acting", "confirming"].every(function(p) {

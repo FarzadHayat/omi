@@ -1,4 +1,4 @@
-from hark.speech import ClauseChunker, clean_for_speech
+from omi.speech import ClauseChunker, clean_for_speech
 
 
 def stream(text: str, step: int = 3, **kw) -> list[str]:

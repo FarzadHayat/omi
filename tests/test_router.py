@@ -2,12 +2,12 @@ import time
 
 import pytest
 
-from hark.router import Route, normalise, parse_number, route, warm
+from omi.router import Route, normalise, parse_number, route, warm
 
 POSITIVE = [
     ("Volume up.", "volume", {"action": "up"}),
     ("turn the volume down please", "volume", {"action": "down"}),
-    ("Hey Hark, mute", "volume", {"action": "mute"}),
+    ("Hey Omi, mute", "volume", {"action": "mute"}),
     ("unmute the sound", "volume", {"action": "unmute"}),
     ("volume to fifty percent", "volume", {"action": "set", "value": 50}),
     ("set the volume to 75%", "volume", {"action": "set", "value": 75}),
@@ -26,7 +26,7 @@ POSITIVE = [
     ("stop the music", "media", {"action": "pause"}),
     ("next song", "media", {"action": "next"}),
     ("skip this track", "media", {"action": "next"}),
-    ("okay hark, next track please", "media", {"action": "next"}),
+    ("okay omi, next track please", "media", {"action": "next"}),
     ("previous track", "media", {"action": "previous"}),
     ("what's playing", "media", {"action": "now_playing"}),
     ("what song is this", "media", {"action": "now_playing"}),
@@ -58,7 +58,7 @@ POSITIVE = [
     ("what's on my clipboard", "clipboard_get", {}),
     ("read the clipboard", "clipboard_get", {}),
     ("stop", "stop", {}),
-    ("hark stop", "stop", {}),
+    ("omi stop", "stop", {}),
     ("never mind", "stop", {}),
     ("be quiet", "stop", {}),
 ]
@@ -125,7 +125,7 @@ def test_table_sizes():
 
 
 def test_normalise_and_numbers():
-    assert normalise("Hey Hark, could you please Open Spotify, thanks!") == "open spotify"
+    assert normalise("Hey Omi, could you please Open Spotify, thanks!") == "open spotify"
     assert parse_number("twenty five") == 25
     assert parse_number("a hundred") == 100
     assert parse_number("75") == 75
@@ -191,7 +191,7 @@ SPOKEN = [
     ("open whats app", "launch_or_focus", {"app": "whatsapp"}),
     ("open ghost tea", "launch_or_focus", {"app": "ghostty"}),
     ("open moon light", "launch_or_focus", {"app": "moonlight"}),
-    ("okay hark open the browser", "launch_or_focus", {"app": "browser"}),
+    ("okay omi open the browser", "launch_or_focus", {"app": "browser"}),
     ("go to workspace three", "switch_workspace", {"n": 3}),
     ("workspace two", "switch_workspace", {"n": 2}),
     ("switch to desktop number four", "switch_workspace", {"n": 4}),
@@ -223,7 +223,7 @@ SPOKEN = [
     ("stop", "stop", {}),
     ("never mind", "stop", {}),
     ("shut up", "stop", {}),
-    ("hey hark uh stop talking", "stop", {}),
+    ("hey omi uh stop talking", "stop", {}),
 ]
 SPOKEN_NEGATIVE = [
     "whats the weather like today", "tell me a joke", "how loud is a jet engine", "can you open the window",
@@ -240,7 +240,7 @@ SPOKEN_NEGATIVE = [
 
 @pytest.fixture
 def spoken_apps(monkeypatch):
-    from hark import router
+    from omi import router
 
     monkeypatch.setattr(router, "_APPS", set(SPOKEN_APPS))
     monkeypatch.setattr(router, "_INDEX", None)
@@ -269,7 +269,7 @@ def test_spoken_table_sizes():
 
 
 def test_sound_key():
-    from hark.router import sound_key
+    from omi.router import sound_key
 
     assert sound_key("fire folks") == "frflks" and sound_key("firefox") == "frfks"
     assert sound_key("spot if i") == sound_key("spotify")

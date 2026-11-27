@@ -9,7 +9,6 @@ Item {
   id: root
 
   readonly property string socketPath: Quickshell.env("OMI_SOCKET")
-    || Quickshell.env("HARK_SOCKET")
     || (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/omi/omi.sock"
 
   property QtObject sock: null  // the connected event socket

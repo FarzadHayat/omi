@@ -10,11 +10,11 @@ from typing import Any
 import numpy as np
 import pytest
 
-from hark import config
-from hark.audio.file import NullOut
-from hark.config import Config, DictationConfig
-from hark.daemon import Daemon
-from hark.dictation import (
+from omi import config
+from omi.audio.file import NullOut
+from omi.config import Config, DictationConfig
+from omi.daemon import Daemon
+from omi.dictation import (
     ActiveContext,
     MediaPauser,
     apply_replacements,
@@ -25,8 +25,8 @@ from hark.dictation import (
     resolve_app_mode,
     strip_llm_wrapper,
 )
-from hark.session import Session
-from hark.tools.base import ToolRegistry
+from omi.session import Session
+from omi.tools.base import ToolRegistry
 
 
 class FakeAudioIn:

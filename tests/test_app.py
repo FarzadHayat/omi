@@ -9,14 +9,14 @@ from pathlib import Path
 
 import pytest
 
-from hark import app, config
-from hark.config import Config
-from hark.memory import jobs
+from omi import app, config
+from omi.config import Config
+from omi.memory import jobs
 
 
 @pytest.fixture(autouse=True)
 def state_dir(tmp_path, monkeypatch):
-    """Turn traces go to a temp folder, never the real ~/.local/state/hark."""
+    """Turn traces go to a temp folder, never the real ~/.local/state/omi."""
     monkeypatch.setattr(config, "STATE_DIR", tmp_path / "state")
 
 
@@ -28,7 +28,7 @@ def sock_dir():
 
 
 async def test_missing_models_do_not_stop_the_daemon(tmp_path, sock_dir, monkeypatch):
-    monkeypatch.setenv("HARK_DRY_RUN", "1")
+    monkeypatch.setenv("OMI_DRY_RUN", "1")
     cfg = Config()
     cfg.audio.sink = "null"
     cfg.stt.engine = "moonshine"
@@ -43,7 +43,7 @@ async def test_missing_models_do_not_stop_the_daemon(tmp_path, sock_dir, monkeyp
     cfg.memory.index = str(tmp_path / "mem.sqlite")
     cfg.web.port = 0  # never the real phone page port
     d = await app.build(cfg)
-    d.socket_path = sock_dir / "hark.sock"
+    d.socket_path = sock_dir / "omi.sock"
     await d.start()
     try:
         await d.ready.wait()
@@ -58,7 +58,7 @@ async def test_missing_models_do_not_stop_the_daemon(tmp_path, sock_dir, monkeyp
 
 
 async def test_talker_is_warmed_on_the_new_memory_after_a_session_ends(tmp_path, sock_dir, monkeypatch):
-    monkeypatch.setenv("HARK_DRY_RUN", "1")
+    monkeypatch.setenv("OMI_DRY_RUN", "1")
     cfg = Config()
     cfg.audio.sink = "null"
     cfg.stt.engine = "moonshine"
@@ -79,7 +79,7 @@ async def test_talker_is_warmed_on_the_new_memory_after_a_session_ends(tmp_path,
 
     monkeypatch.setattr(jobs, "end_session", digest)
     d = await app.build(cfg)
-    d.socket_path = sock_dir / "hark.sock"
+    d.socket_path = sock_dir / "omi.sock"
     await d.start()
     try:
         await d.ready.wait()

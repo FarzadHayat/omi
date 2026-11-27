@@ -12,12 +12,12 @@ from typing import Any
 import httpx
 import pytest
 
-from hark.brain.base import VOICE_STYLE
-from hark.brain.llama_server import LlamaServer
-from hark.brain.local import MAX_ROUNDS, REFUSED_REPLY, LocalBrain, SpeechFilter
-from hark.config import LocalLlmConfig
-from hark.events import TextDelta, ToolEnd, ToolStart, TurnContext, TurnDone
-from hark.tools.base import Tool, ToolRegistry, ToolResult
+from omi.brain.base import VOICE_STYLE
+from omi.brain.llama_server import LlamaServer
+from omi.brain.local import MAX_ROUNDS, REFUSED_REPLY, LocalBrain, SpeechFilter
+from omi.config import LocalLlmConfig
+from omi.events import TextDelta, ToolEnd, ToolStart, TurnContext, TurnDone
+from omi.tools.base import Tool, ToolRegistry, ToolResult
 
 
 class FakeServer:
@@ -165,7 +165,7 @@ async def test_prefix_is_byte_stable_and_recall_rides_on_user_message(setup):
     await run(brain, "hello", TurnContext("s", "Profile: likes tea.", ["fact one"], history))
     await run(brain, "hello", TurnContext("s", "Profile: likes tea.", ["fact two"], history))
     a, b = server.requests[-2], server.requests[-1]
-    expected = VOICE_STYLE.format(name="Hark") + "\n\nProfile: likes tea."
+    expected = VOICE_STYLE.format(name="Omi") + "\n\nProfile: likes tea."
     assert a["messages"][0]["content"] == expected
     assert json.dumps(a["messages"][:-1]) == json.dumps(b["messages"][:-1])
     assert json.dumps(a["tools"]) == json.dumps(b["tools"])
@@ -219,10 +219,10 @@ async def test_http_error_ends_turn_with_error(setup):
 
 async def test_api_key_is_read_from_named_env_at_call_time(monkeypatch):
     async with FakeServer() as server:
-        brain = LocalBrain(LocalLlmConfig(base_url=server.url + "/v1", api_key_env="HARK_TEST_KEY"),
+        brain = LocalBrain(LocalLlmConfig(base_url=server.url + "/v1", api_key_env="OMI_TEST_KEY"),
                            ToolRegistry())
         await brain.start()
-        monkeypatch.setenv("HARK_TEST_KEY", "test-value")
+        monkeypatch.setenv("OMI_TEST_KEY", "test-value")
         await run(brain, "hello")
         await brain.close()
     assert "authorization" not in server.headers[0]
@@ -295,9 +295,9 @@ async def test_live_local_brain():
 
 
 def test_local_talker_gets_a_slim_tool_list():
-    from hark.memory import NullMemory
-    from hark.memory.tools import memory_tools
-    from hark.worker import delegate_tool
+    from omi.memory import NullMemory
+    from omi.memory.tools import memory_tools
+    from omi.worker import delegate_tool
 
     reg = make_registry([])
     for t in [*memory_tools(NullMemory()), delegate_tool(None)]:
@@ -399,8 +399,8 @@ async def test_llama_server_dies_with_its_daemon_and_is_adopted_after(tmp_path, 
     driver = tmp_path / "driver.py"
     driver.write_text(
         "import asyncio, sys, time\n"
-        "from hark.brain.llama_server import LlamaServer\n"
-        "from hark.config import LocalLlmConfig\n"
+        "from omi.brain.llama_server import LlamaServer\n"
+        "from omi.config import LocalLlmConfig\n"
         "async def main():\n"
         f"    ls = LlamaServer(LocalLlmConfig(model={str(model)!r}, port={port}), binary={str(binary)!r}, state_dir={str(tmp_path)!r})\n"
         "    await ls.start()\n"
@@ -452,7 +452,7 @@ async def test_llama_server_dies_with_its_daemon_and_is_adopted_after(tmp_path, 
 
 
 async def test_race_cancels_its_work_when_the_caller_is_cancelled():
-    from hark.brain.local import race
+    from omi.brain.local import race
 
     started, cancelled = asyncio.Event(), asyncio.Event()
 
@@ -501,7 +501,7 @@ async def test_history_start_stays_fixed_while_the_session_window_slides(setup):
 
 
 async def test_device_action_result_is_spoken_without_a_second_round(setup, monkeypatch):
-    from hark.brain import local
+    from omi.brain import local
 
     server, brain, calls = setup
     monkeypatch.setattr(local, "SPEAK_RESULT", frozenset({"set_volume"}))
@@ -529,7 +529,7 @@ def test_tools_without_required_arguments_drop_the_empty_list():
 
 
 def test_recall_already_in_the_conversation_is_not_repeated():
-    from hark.brain.local import new_recall
+    from omi.brain.local import new_recall
 
     history = [{"role": "user", "content": "Tell me a fun fact about octopuses"},
                {"role": "assistant", "content": "Octopuses have three hearts and blue blood."}]

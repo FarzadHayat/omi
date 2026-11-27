@@ -7,11 +7,11 @@ import numpy as np
 import httpx
 import pytest
 
-from hark.config import SttConfig, TtsConfig
-from hark.stt import available_stt_engines, create as create_stt
-from hark.stt.cloud import DeepgramSTT, GroqSTT, OpenAISTT, pcm_to_wav_bytes
-from hark.tts import available_tts_engines, create as create_tts
-from hark.tts.cloud import ElevenLabsTTS, OpenAITTS
+from omi.config import SttConfig, TtsConfig
+from omi.stt import available_stt_engines, create as create_stt
+from omi.stt.cloud import DeepgramSTT, GroqSTT, OpenAISTT, pcm_to_wav_bytes
+from omi.tts import available_tts_engines, create as create_tts
+from omi.tts.cloud import ElevenLabsTTS, OpenAITTS
 
 
 def test_pcm_to_wav_bytes_roundtrip() -> None:

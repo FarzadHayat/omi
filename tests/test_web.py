@@ -14,13 +14,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from hark.config import Config, WebConfig
-from hark.daemon import Daemon
-from hark.events import TextDelta, TurnDone
-from hark.protocol import WEB_AUDIO_HEADER
-from hark.session import Session
-from hark.web import server as web
-from hark.web.websocket import connect
+from omi.config import Config, WebConfig
+from omi.daemon import Daemon
+from omi.events import TextDelta, TurnDone
+from omi.protocol import WEB_AUDIO_HEADER
+from omi.session import Session
+from omi.web import server as web
+from omi.web.websocket import connect
 from tests.fakes import CaptureOut, FakeAudioIn, FakeBrain, FakeRouter, FakeSTT, FakeTTS, Route, make_registry
 
 ME = "me@example.com"
@@ -49,7 +49,7 @@ def make(sock_dir, brain=None, peer_ok=lambda sock: True, origins=None):
         state_dir=sock_dir,
     )
     reg.confirm = session.confirm
-    d = Daemon(session, Config(), audio_in=FakeAudioIn(), socket_path=sock_dir / "run" / "hark.sock")
+    d = Daemon(session, Config(), audio_in=FakeAudioIn(), socket_path=sock_dir / "run" / "omi.sock")
     cfg = WebConfig(port=0, origins=origins or [])
     d.web = web.WebServer(d, cfg, logins={ME}, own_ips=PC_IPS, peer_ok=peer_ok)
     d.out, d.calls = out, calls
@@ -211,11 +211,11 @@ async def test_websocket_needs_login_and_the_page_origin(daemon):
 
 
 async def test_configured_origin_is_accepted(sock_dir):
-    d = make(sock_dir, origins=["https://hark.example"])
+    d = make(sock_dir, origins=["https://omi.example"])
     await d.start()
     try:
         port = d.web.port
-        ws = await connect(f"ws://127.0.0.1:{port}/ws", ws_headers(port, origin="https://hark.example"))
+        ws = await connect(f"ws://127.0.0.1:{port}/ws", ws_headers(port, origin="https://omi.example"))
         await ws.close()
     finally:
         await d.close()

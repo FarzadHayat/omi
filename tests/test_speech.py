@@ -10,9 +10,9 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from hark import stt, tts
-from hark.config import SttConfig, TtsConfig
-from hark.stt.base import SAMPLE_RATE
+from omi import stt, tts
+from omi.config import SttConfig, TtsConfig
+from omi.stt.base import SAMPLE_RATE
 
 FIX = Path(__file__).parent / "fixtures"
 REFS = {
@@ -159,7 +159,7 @@ def test_piper_keeps_only_a_breath_after_a_clause():
 
 
 def test_nemotron_hotword_vocab_is_written_from_tokens(tmp_path):
-    from hark.stt.nemotron import write_hotwords
+    from omi.stt.nemotron import write_hotwords
 
     tokens = tmp_path / "tokens.txt"
     tokens.write_text("<unk> 0\n▁t 1\n▁th 2\n")
@@ -169,7 +169,7 @@ def test_nemotron_hotword_vocab_is_written_from_tokens(tmp_path):
 
 
 def test_nemotron_hears_the_users_own_words():
-    from hark.stt.nemotron import NemotronSTT
+    from omi.stt.nemotron import NemotronSTT
 
     voice = tts.create(TtsConfig(engine="kokoro", kokoro_voice="af_heart"))
     audio = to_16k(np.concatenate(list(voice.synth("Show me the Omarchy menu."))), voice.sample_rate)
@@ -180,7 +180,7 @@ def test_nemotron_hears_the_users_own_words():
 
 
 def test_default_engine_is_parakeet_and_nemotron_streams():
-    from hark.session import is_streaming
+    from omi.session import is_streaming
 
     assert SttConfig().engine == "parakeet"
     assert not is_streaming(stt.create(SttConfig()))
