@@ -42,7 +42,9 @@ Panel {
   property int rowIndex: 0
   property bool cursorActive: false
   property bool settingsOpen: false
-  readonly property var rows: (omi.confirm ? ["yes", "no"] : []).concat(["input", "stop"])
+  // Stop only shows while there is something to stop.
+  readonly property bool busy: ["listening", "thinking", "speaking", "acting", "confirming"].indexOf(phase) >= 0
+  readonly property var rows: (omi.confirm ? ["yes", "no"] : []).concat(busy ? ["input", "stop"] : ["input"])
   readonly property string currentRow: cursorActive ? rows[Math.max(0, Math.min(rowIndex, rows.length - 1))] : ""
 
   readonly property var installedProviders: {
@@ -554,6 +556,7 @@ Panel {
 
           Button {
             objectName: "stopButton"
+            visible: root.busy
             text: strings.t("stop")
             iconText: "\u{f04db}"
             bordered: true

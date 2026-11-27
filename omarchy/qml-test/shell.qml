@@ -97,7 +97,7 @@ ShellRoot {
         shell.check("answered", h.confirm === null)
         shell.step = 2
       } else if (shell.step === 2 && h.phase === "idle") {
-        shell.check("rows without question", JSON.stringify(widget.rows) === JSON.stringify(["input", "stop"]), widget.rows)
+        shell.check("rows without question", JSON.stringify(widget.rows) === JSON.stringify(["input"]) && !widget.busy, widget.rows)
         shell.check("say", h.say("  open the browser  "))
         h.stop()
         shell.step = 3
