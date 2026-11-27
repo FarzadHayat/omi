@@ -62,7 +62,9 @@ Panel {
       "bf_emma": "Emma",
       "bm_george": "George"
     }
-    return map[id] || id
+    if (map[id]) return map[id]
+    if (!id) return ""
+    return id.charAt(0).toUpperCase() + id.slice(1)
   }
 
   function sensitivityLabel(level) {
@@ -77,7 +79,32 @@ Panel {
     return strings.t("settings.smart")
   }
 
+  function dictationModeLabel(mode) {
+    var map = {
+      "auto": strings.t("settings.dictate_auto"),
+      "raw": strings.t("settings.dictate_raw"),
+      "clean": strings.t("settings.dictate_clean"),
+      "message": strings.t("settings.dictate_message"),
+      "mail": strings.t("settings.dictate_mail"),
+      "note": strings.t("settings.dictate_note"),
+      "code": strings.t("settings.dictate_code")
+    }
+    return map[mode] || strings.t("settings.dictate_auto")
+  }
+
   function engineLabel(id) {
+    var map = {
+      "parakeet": "Parakeet v3",
+      "nemotron": "Nemotron",
+      "moonshine": "Moonshine",
+      "groq": "Groq (Cloud)",
+      "deepgram": "Deepgram (Cloud)",
+      "openai": "OpenAI (Cloud)",
+      "kokoro": "Kokoro",
+      "piper": "Piper",
+      "elevenlabs": "ElevenLabs (Cloud)"
+    }
+    if (map[id]) return map[id]
     if (!id) return ""
     return id.charAt(0).toUpperCase() + id.slice(1)
   }
@@ -630,9 +657,9 @@ Panel {
                 }
               }
 
-              // Voice selector (Kokoro presets only)
+              // Voice selector (shown whenever the active TTS engine has voice presets)
               RowLayout {
-                visible: omi.ttsEngine === "kokoro"
+                visible: omi.voices && omi.voices.length > 0
                 Layout.fillWidth: true
                 spacing: Style.space(8)
 
@@ -682,6 +709,60 @@ Panel {
                   onClicked: omi.cycleSpeed()
                   Accessible.role: Accessible.Button
                   Accessible.name: strings.t("settings.speed") + ": " + text
+                }
+              }
+
+              // Dictation mode (Hex / Superwhisper style: Super+Alt+D)
+              RowLayout {
+                Layout.fillWidth: true
+                spacing: Style.space(8)
+
+                Text {
+                  textFormat: Text.PlainText
+                  text: strings.t("settings.dictation")
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+
+                Item { Layout.fillWidth: true }
+
+                Button {
+                  objectName: "dictationModeButton"
+                  text: root.dictationModeLabel(omi.dictationMode)
+                  bordered: true
+                  foreground: Commons.Color.accent
+                  fontFamily: root.fontFamily
+                  onClicked: omi.cycleDictationMode()
+                  Accessible.role: Accessible.Button
+                  Accessible.name: strings.t("settings.dictation") + ": " + text
+                }
+              }
+
+              // Pause media while dictating
+              RowLayout {
+                Layout.fillWidth: true
+                spacing: Style.space(8)
+
+                Text {
+                  textFormat: Text.PlainText
+                  text: strings.t("settings.pause_media")
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+
+                Item { Layout.fillWidth: true }
+
+                Button {
+                  objectName: "pauseMediaButton"
+                  text: omi.dictationPauseMedia ? strings.t("settings.on") : strings.t("settings.off")
+                  bordered: true
+                  foreground: omi.dictationPauseMedia ? Commons.Color.accent : root.dim
+                  fontFamily: root.fontFamily
+                  onClicked: omi.togglePauseMedia()
+                  Accessible.role: Accessible.Button
+                  Accessible.name: strings.t("settings.pause_media") + ": " + text
                 }
               }
 

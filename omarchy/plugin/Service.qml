@@ -31,12 +31,16 @@ Item {
   property bool wakeConversational: true
   property string wakeSensitivity: "medium"
   property bool soundsEnabled: true
+  property string dictationMode: "auto"
+  property bool dictationPauseMedia: true
   property string talker: ""
-  property string sttEngine: "nemotron"
+  property string sttEngine: "parakeet"
   property string ttsEngine: "kokoro"
   property real ttsSpeed: 1.0
   property string voice: "af_heart"
   property var providers: []
+  property var sttEngines: []
+  property var ttsEngines: []
   property var voices: ["af_heart", "af_bella", "am_adam", "bf_emma", "bm_george"]
   property string healthError: ""
   property string _pendingSay: ""
@@ -93,11 +97,18 @@ Item {
     } else if (ev === "settings") {
       if (typeof msg.talker === "string") talker = msg.talker
       if (typeof msg.voice === "string" && msg.voice !== "") voice = msg.voice
+      if (Array.isArray(msg.voices)) voices = msg.voices
+      if (Array.isArray(msg.stt_engines)) sttEngines = msg.stt_engines
+      if (Array.isArray(msg.tts_engines)) ttsEngines = msg.tts_engines
       if (msg.engines) {
         if (typeof msg.engines.stt === "string" && msg.engines.stt !== "") sttEngine = msg.engines.stt
         if (typeof msg.engines.tts === "string" && msg.engines.tts !== "") ttsEngine = msg.engines.tts
         if (typeof msg.engines.voice === "string" && msg.engines.voice !== "") voice = msg.engines.voice
         if (typeof msg.engines.speed === "number" && isFinite(msg.engines.speed)) ttsSpeed = msg.engines.speed
+      }
+      if (msg.dictation) {
+        if (typeof msg.dictation.mode === "string") dictationMode = msg.dictation.mode
+        if (typeof msg.dictation.pause_media === "boolean") dictationPauseMedia = msg.dictation.pause_media
       }
       if (msg.wake) {
         if (typeof msg.wake.enabled === "boolean") wakeEnabled = msg.wake.enabled
@@ -119,7 +130,13 @@ Item {
         if (typeof msg.engines.speed === "number" && isFinite(msg.engines.speed)) ttsSpeed = msg.engines.speed
       }
       if (Array.isArray(msg.providers)) providers = msg.providers
-      if (Array.isArray(msg.voices) && msg.voices.length > 0) voices = msg.voices
+      if (Array.isArray(msg.stt_engines)) sttEngines = msg.stt_engines
+      if (Array.isArray(msg.tts_engines)) ttsEngines = msg.tts_engines
+      if (Array.isArray(msg.voices)) voices = msg.voices
+      if (msg.dictation) {
+        if (typeof msg.dictation.mode === "string") dictationMode = msg.dictation.mode
+        if (typeof msg.dictation.pause_media === "boolean") dictationPauseMedia = msg.dictation.pause_media
+      }
       if (msg.wake) {
         if (typeof msg.wake.enabled === "boolean") wakeEnabled = msg.wake.enabled
         if (typeof msg.wake.call_mode === "string") wakeCallMode = msg.wake.call_mode
@@ -194,12 +211,35 @@ Item {
     return setSetting("tts.voice", voices[(idx + 1) % voices.length])
   }
 
+  function _readyNames(list, fallback) {
+    var out = []
+    var arr = list || []
+    for (var i = 0; i < arr.length; i++) {
+      if (arr[i].installed) out.push(arr[i].name)
+    }
+    return out.length > 0 ? out : fallback
+  }
+
   function cycleStt() {
-    return setSetting("stt.engine", sttEngine === "nemotron" ? "moonshine" : "nemotron")
+    var order = _readyNames(sttEngines, ["parakeet", "nemotron", "moonshine"])
+    var idx = order.indexOf(sttEngine)
+    return setSetting("stt.engine", order[(idx + 1) % order.length])
   }
 
   function cycleTts() {
-    return setSetting("tts.engine", ttsEngine === "kokoro" ? "piper" : "kokoro")
+    var order = _readyNames(ttsEngines, ["kokoro", "piper"])
+    var idx = order.indexOf(ttsEngine)
+    return setSetting("tts.engine", order[(idx + 1) % order.length])
+  }
+
+  function cycleDictationMode() {
+    var order = ["auto", "raw", "clean", "message", "mail", "note", "code"]
+    var idx = order.indexOf(dictationMode)
+    return setSetting("dictation.mode", order[(idx + 1) % order.length])
+  }
+
+  function togglePauseMedia() {
+    return setSetting("dictation.pause_media", dictationPauseMedia ? "off" : "on")
   }
 
   function cycleSpeed() {

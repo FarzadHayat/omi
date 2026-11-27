@@ -79,6 +79,6 @@ A phone's turns play their reply on that phone only.
 WEB_COMMANDS = ("ptt_start", "ptt_stop", "say", "stop", "confirm", "played")
 WEB_AUDIO_HEADER = "<II"  # struct format: sample rate, seq
 
-COMMANDS = ("say", "wav", "ptt_start", "ptt_stop", "stop", "confirm", "ask_confirm", "tool", "mascot",
-            "status", "set", "subscribe")
+COMMANDS = ("say", "wav", "ptt_start", "ptt_stop", "dictate_start", "dictate_stop", "dictate_toggle",
+            "stop", "confirm", "ask_confirm", "tool", "mascot", "status", "set", "subscribe")
 EVENTS = ("state", "transcript", "speech", "tool", "confirm_request", "progress", "mascot", "cursor", "wake", "settings", "timing")

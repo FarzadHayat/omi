@@ -8,7 +8,12 @@ A local-first voice assistant and animated on-screen companion for Omarchy & Hyp
 
 ## Features
 
-- **Fast voice loop + conversational wake word**: Always-on **"Hey Omi"** / **"Okay Omi"** wake word (`sherpa-onnx` 3.3M streaming keyword spotter + Silero VAD, ~1.7% CPU, toggleable live) with continuous phone-call conversation mode (keeps listening after every reply until you say *"goodbye"* / *"see ya"* / *"that's all"* or pause for 12 s), streaming local STT (`nemotron` or `moonshine`), and neural local TTS (`kokoro` v1.0 or `piper`).
+- **Fast voice loop + smart wake word**: Always-on **"Hey Omi"** / **"Okay Omi"** wake word (`sherpa-onnx` 3.3M streaming keyword spotter + Silero VAD, ~1.7% CPU, toggleable live) with **Smart (`auto`)**, **Continuous**, and **Single-turn** call modes, plus soft procedural sound effects.
+- **Built-in Hex + Superwhisper-style dictation (`Super + Alt + D`)**: Hold to dictate directly into any focused window with clipboard-preserving paste, auto-pausing active media while you talk, custom word replacements, and smart modes (`Auto`, `Raw`, `Clean`, `Message`, `Mail`, `Note`, `Code`) — instant raw transcription in terminals/editors, formatted text in chat/mail/notes, and in-place selection rewrites when text is highlighted.
+- **Best local & cloud STT and TTS**:
+  - **Local STT**: **NVIDIA Parakeet TDT 0.6B v3** (default — 10x faster than streaming, native punctuation & capitalization, 25 languages), **Nemotron Streaming 160ms**, or **Moonshine**.
+  - **Cloud STT**: **Groq Whisper Large v3 Turbo** (`GROQ_API_KEY`), **Deepgram Nova-3** (`DEEPGRAM_API_KEY`), or **OpenAI `gpt-4o-mini-transcribe`** (`OPENAI_API_KEY`).
+  - **Local & Cloud TTS**: **Kokoro v1.0** (default local neural), **Piper**, **OpenAI `gpt-4o-mini-tts`** (`OPENAI_API_KEY`), or **ElevenLabs `eleven_flash_v2_5`** (`ELEVENLABS_API_KEY`). Switch live from the bar Settings drawer or `omi engines`.
 - **Animated companion mascot**: Lives in the Omarchy bar and pops up as a click-through floating overlay with speech bubbles, pointing/highlighting (`point_at`, `highlight_window`), and cursor-following eyes.
 - **Follows your Omarchy theme live**: Bar icon, floating companion, conversation panel, and mobile web PWA automatically adapt to your active Omarchy theme (`Commons.Color` / `~/.local/state/omarchy/current/theme/colors.toml`).
 - **Desktop, browser, terminal & T3 Code control**:
@@ -27,9 +32,10 @@ A local-first voice assistant and animated on-screen companion for Omarchy & Hyp
 
 | Shortcut | Action |
 | --- | --- |
-| `Super + Alt + V` (hold) | Push-to-talk (hold to speak, release to send) |
+| `Super + Alt + V` (hold) | Push-to-talk with Omi (hold to speak, release to send) |
+| `Super + Alt + D` (hold) | Dictate at cursor (Hex / Superwhisper style; hold to dictate, release to paste) |
 | `Super + Alt + O` | Toggle the Omi panel in the Omarchy bar |
-| `Super + Alt + Escape` | Stop speaking / cancel current turn or job |
+| `Super + Alt + Escape` | Stop speaking / cancel current turn, dictation, or job |
 
 ## Requirements
 
@@ -54,9 +60,10 @@ uv sync
 
 Download speech models into `~/.local/share/omi/models/` (default locations):
 
-- **Nemotron streaming STT** (`~/.local/share/omi/models/nemotron-streaming-160ms/`): `encoder.int8.onnx`, `decoder.int8.onnx`, `joiner.int8.onnx`, `tokens.txt` (from `sherpa-onnx` `sherpa-onnx-nemotron-speech-streaming-en-0.6b-int8-2026-01-14`)
-- **Kokoro TTS** (`~/.local/share/omi/models/kokoro/`): `kokoro-v1.0.onnx` and `voices-v1.0.bin` (from `kokoro-onnx` releases)
+- **Parakeet TDT v3 STT (default)** (`~/.local/share/omi/models/parakeet-tdt-0.6b-v3-int8/`): `sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8` from `sherpa-onnx` releases (or **Nemotron Streaming** in `nemotron-streaming-160ms/`)
+- **Kokoro TTS (default)** (`~/.local/share/omi/models/kokoro/`): `kokoro-v1.0.onnx` and `voices-v1.0.bin` (from `kokoro-onnx` releases)
 - **Wake word & VAD** (`kws-gigaspeech-3.3M` + `silero_vad.onnx`): downloaded automatically on first start when `[wake].enabled = true`
+- **Cloud STT/TTS (optional)**: export `GROQ_API_KEY`, `DEEPGRAM_API_KEY`, `OPENAI_API_KEY`, or `ELEVENLABS_API_KEY` and switch live with `omi engines` / `omi set` or the bar Settings drawer.
 
 Install the Omarchy bar plugin, systemd user service, and Hyprland keybindings:
 
@@ -77,10 +84,13 @@ Copy [`config.example.toml`](config.example.toml) to `~/.config/omi/config.toml`
 Live runtime tweaks:
 
 ```bash
-omi providers                  # see all supported providers & installed CLIs
+omi providers                  # see all supported AI providers & installed CLIs
+omi engines                    # see local & cloud STT/TTS engines and readiness
 omi set brain.talker opencode  # switch provider live (claude|opencode|codex|agy|gemini|local|auto)
-omi set brain.model sonnet     # switch active talker model live
-omi set tts.voice bm_george    # switch Kokoro voice live
+omi set stt.engine parakeet    # switch STT live (parakeet|nemotron|moonshine|groq|deepgram|openai)
+omi set tts.engine kokoro      # switch TTS live (kokoro|piper|openai|elevenlabs)
+omi set dictation.mode auto    # switch dictation mode (auto|raw|clean|message|mail|note|code)
+omi set tts.voice bm_george    # switch active voice live
 omi set wake.enabled off       # pause/resume always-on wake word live
 omi say "what's running in my terminal?"
 ```

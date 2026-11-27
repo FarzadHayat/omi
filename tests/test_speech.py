@@ -179,8 +179,9 @@ def test_nemotron_hears_the_users_own_words():
     assert "omarchy" not in plain and "omarchy" in boosted, (plain, boosted)
 
 
-def test_default_engine_is_streaming():
+def test_default_engine_is_parakeet_and_nemotron_streams():
     from hark.session import is_streaming
 
-    assert SttConfig().engine == "nemotron"
-    assert is_streaming(stt.create(SttConfig()))
+    assert SttConfig().engine == "parakeet"
+    assert not is_streaming(stt.create(SttConfig()))
+    assert is_streaming(stt.create(SttConfig(engine="nemotron")))

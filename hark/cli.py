@@ -78,6 +78,9 @@ def _print_human(msg: dict[str, Any]) -> None:
     elif ev == "progress":
         print(f"... {msg['text']}")
     elif ev is None and msg.get("done"):
+        if msg.get("text") and "inserted" in msg:
+            how = f" ({msg.get('mode')})" if msg.get("mode") else ""
+            print(f"dictated{how}: {msg['text']}")
         if msg.get("cancelled"):
             print("(cancelled)")
         if msg.get("timing"):
@@ -96,6 +99,10 @@ def _print_status(msg: dict[str, Any]) -> None:
         phrases = ", ".join(wake.get("phrases") or [])
         state = f"on ({phrases})" if wake.get("enabled") else ("starting" if wake.get("configured") and not msg.get("ready", True) else "off")
         print(f"wake: {state}")
+    dictation = msg.get("dictation") or {}
+    if dictation:
+        pm = "on" if dictation.get("pause_media") else "off"
+        print(f"dictation: {dictation.get('mode', 'auto')} (pause media: {pm})")
     print(f"session: {msg.get('session_id')}")
     if msg.get("confirm"):
         print(f"waiting for yes or no: {msg['confirm']['question']}")
@@ -115,6 +122,12 @@ def _build_request(args: argparse.Namespace) -> dict[str, Any]:
             req["out"] = str(Path(args.out).resolve())
     elif c == "ptt":
         req = {"cmd": f"ptt_{args.action}"}
+    elif c == "dictate":
+        req = {"cmd": f"dictate_{args.action}"}
+        if getattr(args, "mode", None):
+            req["mode"] = args.mode
+        if getattr(args, "dry_run", False):
+            req["dry_run"] = True
     elif c in ("yes", "no"):
         req = {"cmd": "confirm", "answer": c == "yes"}
     elif c == "set":
@@ -160,15 +173,21 @@ def _parser() -> argparse.ArgumentParser:
     wav.add_argument("--out", help="write the reply audio to this wav instead of playing it")
     ptt = sub.add_parser("ptt", help="push-to-talk")
     ptt.add_argument("action", choices=["start", "stop"])
+    dc = sub.add_parser("dictate", help="Hex/Superwhisper-style voice dictation into the focused window")
+    dc.add_argument("action", choices=["start", "stop", "toggle"])
+    dc.add_argument("--mode", choices=["auto", "raw", "clean", "message", "mail", "note", "code"],
+                    help="override dictation mode for this utterance")
+    dc.add_argument("--dry-run", action="store_true", help="transcribe and format without pasting")
     sub.add_parser("stop", help="stop speaking and cancel the running turn")
     sub.add_parser("status", help="show daemon state")
     sub.add_parser("yes", help="approve the pending confirmation")
     sub.add_parser("no", help="refuse the pending confirmation")
-    st = sub.add_parser("set", help="change a setting live (brain.talker, brain.model, stt.engine, tts.engine, tts.voice, tts.speed, audio.sounds, wake.*)")
+    st = sub.add_parser("set", help="change a setting live (brain.*, stt.engine, tts.*, dictation.*, audio.sounds, wake.*)")
     st.add_argument("key")
     st.add_argument("value")
     st.add_argument("--save", action="store_true", help="also persist this setting to config.toml")
     sub.add_parser("providers", help="list supported AI providers and which CLIs are installed")
+    sub.add_parser("engines", help="list local and cloud STT/TTS engines and whether each is ready")
     pt = sub.add_parser("point", help="move Omi on screen to point at (x, y)")
     pt.add_argument("x", type=int)
     pt.add_argument("y", type=int)
@@ -230,6 +249,43 @@ def _print_providers(sock_path: Path, *, as_json: bool = False) -> int:
     return 0
 
 
+def _print_engines(sock_path: Path, *, as_json: bool = False) -> int:
+    from hark.stt import available_stt_engines
+    from hark.tts import available_tts_engines
+
+    cfg = config.load()
+    stt_rows = available_stt_engines(cfg.stt)
+    tts_rows = available_tts_engines(cfg.tts)
+    active_stt, active_tts = cfg.stt.engine, cfg.tts.engine
+    try:
+        for msg in request(sock_path, {"cmd": "status"}):
+            if msg.get("ok"):
+                eng = msg.get("engines") or {}
+                active_stt = eng.get("stt") or active_stt
+                active_tts = eng.get("tts") or active_tts
+                if msg.get("stt_engines"):
+                    stt_rows = msg["stt_engines"]
+                if msg.get("tts_engines"):
+                    tts_rows = msg["tts_engines"]
+                break
+    except (NotRunning, ConnectionError, Incomplete, json.JSONDecodeError):
+        pass
+    if as_json:
+        print(json.dumps({"active": {"stt": active_stt, "tts": active_tts}, "stt": stt_rows, "tts": tts_rows}))
+        return 0
+    print("STT engines:")
+    for r in stt_rows:
+        st = "ready" if r["installed"] else "not set up"
+        mark = " [active]" if r["name"] == active_stt else ""
+        print(f"  {r['name']:11} {st:11} {r['detail']}{mark}")
+    print("TTS engines:")
+    for r in tts_rows:
+        st = "ready" if r["installed"] else "not set up"
+        mark = " [active]" if r["name"] == active_tts else ""
+        print(f"  {r['name']:11} {st:11} {r['detail']}{mark}")
+    return 0
+
+
 def _pending_question(path: Path) -> dict[str, Any] | None:
     for msg in request(path, {"cmd": "status"}):
         return msg.get("confirm")
@@ -242,6 +298,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_daemon()
     if args.command == "providers":
         return _print_providers(args.socket or config.SOCKET_PATH, as_json=args.json)
+    if args.command == "engines":
+        return _print_engines(args.socket or config.SOCKET_PATH, as_json=args.json)
     if args.command in ("install", "uninstall"):
         from hark import install
 

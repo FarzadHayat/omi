@@ -65,18 +65,29 @@ class AudioConfig:
 
 @dataclass
 class SttConfig:
-    # moonshine | nemotron. Nemotron streams while you speak: on 96 spoken commands it
-    # heard 60 of 63 routable ones right (Moonshine 48), at about 215 ms after speech (45).
-    engine: str = "nemotron"
+    # parakeet | nemotron | moonshine | groq | deepgram | openai
+    # Parakeet TDT 0.6B v3 (local) adds native punctuation, capitalization & 25 languages.
+    # Nemotron streams live while you speak; Groq / Deepgram / OpenAI give cloud accuracy.
+    engine: str = "parakeet"
+    parakeet_dir: str = _model_path("parakeet-tdt-0.6b-v3-int8")
     moonshine_dir: str = _model_path("moonshine-base-en")
     nemotron_dir: str = _model_path("nemotron-streaming-160ms")
     threads: int = 4
+    language: str = ""  # empty = auto-detect
     hotwords: list[str] = field(default_factory=lambda: ["Omi", "Omarchy", "Hyprland"])
+    # Cloud STT settings (keys are read from env vars; never store secrets in config.toml)
+    groq_model: str = "whisper-large-v3-turbo"
+    groq_api_key_env: str = "GROQ_API_KEY"
+    deepgram_model: str = "nova-3"
+    deepgram_api_key_env: str = "DEEPGRAM_API_KEY"
+    openai_model: str = "gpt-4o-mini-transcribe"
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_api_key_env: str = "OPENAI_API_KEY"
 
 
 @dataclass
 class TtsConfig:
-    engine: str = "kokoro"  # kokoro | piper
+    engine: str = "kokoro"  # kokoro | piper | openai | elevenlabs
     piper_model: str = _model_path("piper/en_US-lessac-medium.onnx")
     # Full-precision Kokoro fp32 sounds markedly cleaner than int8 (~498 ms first chunk vs 356 ms).
     kokoro_model: str = _model_path(
@@ -91,6 +102,27 @@ class TtsConfig:
     )
     kokoro_voice: str = "af_heart"
     speed: float = 1.0
+    # Cloud TTS settings (keys read from env vars)
+    openai_model: str = "gpt-4o-mini-tts"
+    openai_voice: str = "coral"
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_api_key_env: str = "OPENAI_API_KEY"
+    elevenlabs_model: str = "eleven_flash_v2_5"
+    elevenlabs_voice_id: str = "21m00Tcm4TlvDq8ikWAM"
+    elevenlabs_api_key_env: str = "ELEVENLABS_API_KEY"
+
+
+@dataclass
+class DictationConfig:
+    # Hex + Superwhisper-style hold-to-dictate (Super+Alt+D):
+    # auto (app-aware + selection rewrite) | raw (instant verbatim) | clean | message | mail | note | code
+    mode: str = "auto"
+    pause_media: bool = True  # auto-pause MPRIS media while dictating and resume on release
+    paste_method: str = "auto"  # auto | paste | wtype
+    restore_clipboard: bool = True  # restore previous clipboard content after clipboard-paste insertion
+    use_selection: bool = True  # in auto mode, rewrite highlighted text when a transform command is spoken
+    replacements: dict[str, str] = field(default_factory=dict)  # custom word/phrase replacements
+    app_modes: dict[str, str] = field(default_factory=dict)  # window class/title pattern -> mode override
 
 
 @dataclass
@@ -183,6 +215,7 @@ class Config:
     name: str = "Omi"  # what the assistant calls itself
     audio: AudioConfig = field(default_factory=AudioConfig)
     wake: WakeConfig = field(default_factory=WakeConfig)
+    dictation: DictationConfig = field(default_factory=DictationConfig)
     stt: SttConfig = field(default_factory=SttConfig)
     tts: TtsConfig = field(default_factory=TtsConfig)
     brain: BrainConfig = field(default_factory=BrainConfig)

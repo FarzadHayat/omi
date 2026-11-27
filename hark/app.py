@@ -164,7 +164,13 @@ async def build(cfg: Config) -> Daemon:
         if hasattr(session.tts, "set_voice"):
             session.tts.set_voice(value)
             return session.tts
-        engine = await asyncio.to_thread(ttss.create, replace(cfg.tts, engine="kokoro", kokoro_voice=value))
+        engine_name = cfg.tts.engine
+        if engine_name == "openai":
+            engine = await asyncio.to_thread(ttss.create, replace(cfg.tts, openai_voice=value))
+        elif engine_name == "elevenlabs":
+            engine = await asyncio.to_thread(ttss.create, replace(cfg.tts, elevenlabs_voice_id=value))
+        else:
+            engine = await asyncio.to_thread(ttss.create, replace(cfg.tts, engine="kokoro", kokoro_voice=value))
         await asyncio.to_thread(_warm_tts, engine)
         return engine
 
@@ -208,6 +214,7 @@ async def build(cfg: Config) -> Daemon:
         track_cursor=bool(os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")),
         config_path=CONFIG_PATH,
         play_sfx=sfx.play,
+        dictation_llm=llm,
     )
     if cfg.web.enabled:
         from hark.web.server import WebServer
@@ -220,7 +227,7 @@ async def build(cfg: Config) -> Daemon:
         cfg.wake,
         audio_source=cfg.audio.source,
         audio_sink=cfg.audio.sink,
-        is_ptt_active=lambda: daemon._listening,
+        is_ptt_active=lambda: daemon._listening or daemon._dictating,
         broadcast=daemon.broadcast,
         play_sfx=sfx.play,
     )
@@ -228,8 +235,10 @@ async def build(cfg: Config) -> Daemon:
 
 
 def _warm_tts(tts: Any) -> None:
-    """First synthesis pays for graph setup; do it before the user is waiting."""
+    """First synthesis pays for graph setup on local ONNX models; skip remote APIs."""
     if isinstance(tts, UnavailableTTS):
+        return
+    if type(tts).__module__.endswith(".cloud"):
         return
     for _ in tts.synth("Ready."):
         pass
@@ -237,5 +246,7 @@ def _warm_tts(tts: Any) -> None:
 
 def _warm_stt(stt: Any) -> None:
     if isinstance(stt, UnavailableSTT):
+        return
+    if type(stt).__module__.endswith(".cloud"):
         return
     stt.transcribe(np.zeros(8000, dtype=np.float32))

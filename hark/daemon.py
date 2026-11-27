@@ -32,9 +32,20 @@ import soundfile as sf
 from hark import config
 from hark.audio.base import AudioIn, AudioOut
 from hark.config import Config
+from hark.dictation import (
+    DICTATION_MODES,
+    ActiveContext,
+    MediaPauser,
+    capture_active_context,
+    format_dictation,
+    insert_text,
+)
 from hark.protocol import COMMANDS
 from hark.session import Session
+from hark.stt import available_stt_engines
 from hark.stt.base import SAMPLE_RATE
+from hark.tts import available_tts_engines
+from hark.tts.cloud import OPENAI_VOICES
 
 log = logging.getLogger(__name__)
 
@@ -174,6 +185,10 @@ class Daemon:
         track_cursor: bool = False,
         config_path: Path | None = None,
         play_sfx: Callable[[str], None] | None = None,
+        dictation_llm: Callable[[str], Awaitable[str]] | None = None,
+        dictation_context_fn: Callable[..., Awaitable[ActiveContext]] | None = None,
+        dictation_insert_fn: Callable[..., Awaitable[tuple[bool, str]]] | None = None,
+        media_pauser: MediaPauser | None = None,
     ) -> None:
         self.session = session
         self.web = web  # phone and tablet server (hark.web.server.WebServer), started with the socket
@@ -181,6 +196,10 @@ class Daemon:
         self.cfg = cfg
         self.config_path = config_path  # when set, `set` with save=true persists to this TOML file
         self.play_sfx = play_sfx
+        self.dictation_llm = dictation_llm
+        self.dictation_context_fn = dictation_context_fn or capture_active_context
+        self.dictation_insert_fn = dictation_insert_fn or insert_text
+        self.media_pauser = media_pauser or MediaPauser()
         self.audio_in = audio_in
         self.factories = factories or {}
         self.wav_out = wav_out
@@ -199,6 +218,10 @@ class Daemon:
         self._subs: set[Conn] = set()
         self._server: asyncio.Server | None = None
         self._listening = False
+        self._dictating = False
+        self._dictate_chunks: list[np.ndarray] = []
+        self._dictate_pump: asyncio.Task[int] | None = None
+        self._dictate_ctx: ActiveContext | None = None
         self._pump: asyncio.Task[int] | None = None
         self._warm_task: asyncio.Task[None] | None = None
         self._cursor_task: asyncio.Task[None] | None = None
@@ -330,8 +353,11 @@ class Daemon:
             self._cursor_task.cancel()
         for job in self._jobs:
             job.cancel()
-        if self._listening and self.audio_in is not None:
+        if (self._listening or self._dictating) and self.audio_in is not None:
             await _quietly(self.audio_in.stop())
+        if self._dictating:
+            self._dictating = False
+            await _quietly(self.media_pauser.resume_if_paused())
         await _quietly(self.session.close())
         await self._end_session_job()
         await _quietly(self.session.out.stop())
@@ -460,7 +486,25 @@ class Daemon:
             if not len(pcm) and mic_error:
                 final["error"] = f"no audio came in: {mic_error}"
             return final
+        if cmd == "dictate_start":
+            return await self._dictate_start(quiet=bool(req.get("quiet")))
+        if cmd == "dictate_stop":
+            return await self._dictate_stop(
+                mode_override=req.get("mode"),
+                dry_run=bool(req.get("dry_run")),
+                quiet=bool(req.get("quiet")),
+            )
+        if cmd == "dictate_toggle":
+            if self._dictating:
+                return await self._dictate_stop(
+                    mode_override=req.get("mode"),
+                    dry_run=bool(req.get("dry_run")),
+                    quiet=bool(req.get("quiet")),
+                )
+            return await self._dictate_start(quiet=bool(req.get("quiet")))
         if cmd == "stop":
+            if self._dictating:
+                await self._cancel_dictation()
             if await self.release_mic() or s._utt is not None:
                 await s.cancel_utterance()
             await s.stop()
@@ -531,6 +575,153 @@ class Daemon:
             fed += len(chunk)
         return fed
 
+    async def _pump_dictation(self) -> int:
+        assert self.audio_in is not None
+        fed = 0
+        while (chunk := await self.audio_in.read()) is not None:
+            arr = np.asarray(chunk, dtype=np.float32)
+            self._dictate_chunks.append(arr)
+            fed += len(arr)
+        return fed
+
+    async def _dictate_start(self, *, quiet: bool = False) -> dict[str, Any]:
+        if self.audio_in is None:
+            raise RequestError("no microphone configured")
+        if self._dictating:
+            return {"ok": True, "dictating": True}
+        if await self.release_mic() or self.session._utt is not None:
+            await self.session.cancel_utterance()
+        await self.session.stop()
+        self._dictate_ctx = await self.dictation_context_fn(read_selection=self.cfg.dictation.use_selection)
+        if self.cfg.dictation.pause_media:
+            await self.media_pauser.pause_if_playing()
+        self._dictate_chunks = []
+        try:
+            await self.audio_in.start()
+        except Exception as exc:
+            await self.media_pauser.resume_if_paused()
+            self.errors["microphone"] = str(exc)
+            raise RequestError(f"cannot open the microphone: {exc}") from exc
+        self._dictating = True
+        self._dictate_pump = asyncio.create_task(self._pump_dictation())
+        if self.play_sfx is not None and not quiet:
+            self.play_sfx("wake")
+        await self.broadcast({"event": "state", "state": "listening"})
+        await self.broadcast({"event": "progress", "text": f"Dictating ({self.cfg.dictation.mode})…"})
+        return {"ok": True, "dictating": True}
+
+    async def _cancel_dictation(self) -> None:
+        if not self._dictating:
+            return
+        self._dictating = False
+        if self.audio_in is not None:
+            await _quietly(self.audio_in.stop())
+        if self._dictate_pump is not None:
+            await _quietly(self._dictate_pump)
+            self._dictate_pump = None
+        self._dictate_chunks = []
+        self._dictate_ctx = None
+        await _quietly(self.media_pauser.resume_if_paused())
+        await self.broadcast({"event": "state", "state": "idle"})
+
+    async def _dictate_stop(
+        self,
+        *,
+        mode_override: str | None = None,
+        dry_run: bool = False,
+        quiet: bool = False,
+    ) -> dict[str, Any]:
+        if self.audio_in is None or not self._dictating:
+            raise RequestError("not dictating")
+        self._dictating = False
+        pcm = await self.audio_in.stop()
+        fed = await self._dictate_pump if self._dictate_pump is not None else 0
+        self._dictate_pump = None
+        if len(pcm) > fed:
+            self._dictate_chunks.append(np.asarray(pcm[fed:], dtype=np.float32))
+        audio = np.concatenate(self._dictate_chunks) if self._dictate_chunks else np.asarray(pcm, dtype=np.float32)
+        self._dictate_chunks = []
+        ctx = self._dictate_ctx or ActiveContext()
+        self._dictate_ctx = None
+        await _quietly(self.media_pauser.resume_if_paused())
+
+        mic_error = getattr(self.audio_in, "error", None)
+        if mic_error:
+            self.errors["microphone"] = mic_error
+        elif len(audio):
+            self.errors.pop("microphone", None)
+
+        if len(audio) == 0:
+            await self.broadcast({"event": "state", "state": "idle"})
+            reply: dict[str, Any] = {"ok": True, "done": True, "raw": "", "text": "", "mode": self.cfg.dictation.mode, "inserted": False}
+            if mic_error:
+                reply["error"] = f"no audio came in: {mic_error}"
+            return reply
+
+        if self.play_sfx is not None and not quiet:
+            self.play_sfx("heard")
+        await self.broadcast({"event": "state", "state": "thinking"})
+        await self.ready.wait()
+        try:
+            raw = await asyncio.to_thread(self.session.stt.transcribe, audio)
+        except Exception as exc:
+            await self.broadcast({"event": "state", "state": "idle"})
+            if self.play_sfx is not None and not quiet:
+                self.play_sfx("error")
+            raise RequestError(f"dictation transcription failed: {exc}") from exc
+
+        res = await format_dictation(
+            raw,
+            self.cfg.dictation,
+            ctx,
+            llm=self.dictation_llm,
+            mode_override=mode_override if isinstance(mode_override, str) else None,
+        )
+        inserted = False
+        method = "dry_run" if dry_run else ""
+        if res.text and not dry_run:
+            inserted, method = await self.dictation_insert_fn(
+                res.text,
+                is_terminal=ctx.is_terminal,
+                method=self.cfg.dictation.paste_method,
+                restore_clipboard=self.cfg.dictation.restore_clipboard,
+            )
+            res.inserted = inserted
+            res.method = method
+        if res.text:
+            preview = res.text if len(res.text) <= 80 else res.text[:77] + "…"
+            await self.broadcast({"event": "progress", "text": f"Dictated ({res.mode}): {preview}"})
+            if self.play_sfx is not None and not quiet:
+                self.play_sfx("done" if (inserted or dry_run) else "error")
+        await self.broadcast({"event": "state", "state": "idle"})
+        out: dict[str, Any] = {
+            "ok": True,
+            "done": True,
+            "raw": res.raw,
+            "text": res.text,
+            "mode": res.mode,
+            "inserted": inserted,
+            "method": method,
+            "rewrote_selection": res.rewrote_selection,
+        }
+        if res.error:
+            out["warning"] = res.error
+        return out
+
+    def _active_voice(self) -> str:
+        if self.cfg.tts.engine == "openai":
+            return self.cfg.tts.openai_voice
+        if self.cfg.tts.engine == "elevenlabs":
+            return self.cfg.tts.elevenlabs_voice_id
+        return self.cfg.tts.kokoro_voice
+
+    def _voice_list(self) -> list[str]:
+        if self.cfg.tts.engine == "openai":
+            return list(OPENAI_VOICES)
+        if self.cfg.tts.engine == "kokoro":
+            return list(KOKORO_VOICES)
+        return []
+
     def status(self) -> dict[str, Any]:
         s = self.session
         errors = dict(self.errors)
@@ -549,7 +740,7 @@ class Daemon:
         return {
             "ok": True,
             "name": self.cfg.name,
-            "state": s.state.value,
+            "state": "listening" if self._dictating else s.state.value,
             "ready": self.ready.is_set(),
             "talker": talker,
             "talker_model": talker_model,
@@ -558,7 +749,15 @@ class Daemon:
                 {"name": p["name"], "installed": p["installed"], "model": p["model"]}
                 for p in available_providers(self.cfg)
             ],
-            "voices": list(KOKORO_VOICES),
+            "stt_engines": available_stt_engines(self.cfg.stt),
+            "tts_engines": available_tts_engines(self.cfg.tts),
+            "voices": self._voice_list(),
+            "dictation": {
+                "mode": self.cfg.dictation.mode,
+                "pause_media": self.cfg.dictation.pause_media,
+                "active": self._dictating,
+                "modes": list(DICTATION_MODES),
+            },
             "wake": {
                 "enabled": bool(self.cfg.wake.enabled and self.wake is not None and self.wake.active),
                 "configured": self.cfg.wake.enabled,
@@ -572,7 +771,7 @@ class Daemon:
             "engines": {
                 "stt": self.cfg.stt.engine,
                 "tts": self.cfg.tts.engine,
-                "voice": self.cfg.tts.kokoro_voice,
+                "voice": self._active_voice(),
                 "speed": self.cfg.tts.speed,
             },
             "audio": {
@@ -602,12 +801,19 @@ class Daemon:
             "event": "settings",
             "talker": self.cfg.brain.talker,
             "talker_model": self._active_model(self.cfg.brain.talker),
-            "voice": self.cfg.tts.kokoro_voice,
+            "voice": self._active_voice(),
+            "voices": self._voice_list(),
+            "stt_engines": available_stt_engines(self.cfg.stt),
+            "tts_engines": available_tts_engines(self.cfg.tts),
             "engines": {
                 "stt": self.cfg.stt.engine,
                 "tts": self.cfg.tts.engine,
-                "voice": self.cfg.tts.kokoro_voice,
+                "voice": self._active_voice(),
                 "speed": self.cfg.tts.speed,
+            },
+            "dictation": {
+                "mode": self.cfg.dictation.mode,
+                "pause_media": self.cfg.dictation.pause_media,
             },
             "wake": {
                 "enabled": bool(self.cfg.wake.enabled and self.wake is not None and self.wake.active),
@@ -652,6 +858,22 @@ class Daemon:
             self._persist("tts", "speed", speed, save)
             await self.broadcast(self._settings_event())
             return {"ok": True, "key": key, "value": f"{speed:g}"}
+        if key == "dictation.mode":
+            raw = str(value).strip().lower() if isinstance(value, str) else ""
+            if raw == "super":
+                raw = "auto"
+            if raw not in DICTATION_MODES:
+                raise RequestError(f"dictation.mode expects {', '.join(DICTATION_MODES)}")
+            self.cfg.dictation.mode = raw
+            self._persist("dictation", "mode", raw, save)
+            await self.broadcast(self._settings_event())
+            return {"ok": True, "key": key, "value": raw}
+        if key == "dictation.pause_media":
+            want = self._parse_bool(value, key)
+            self.cfg.dictation.pause_media = want
+            self._persist("dictation", "pause_media", want, save)
+            await self.broadcast(self._settings_event())
+            return {"ok": True, "key": key, "value": "on" if want else "off"}
         if key == "audio.sounds":
             want = self._parse_bool(value, key)
             self.cfg.audio.sounds = want
@@ -722,7 +944,8 @@ class Daemon:
             await self.broadcast(self._settings_event())
             return {"ok": True, "key": key, "value": label}
         if key not in SETTABLE:
-            all_keys = (*SETTABLE, "tts.speed", "audio.sounds", "wake.enabled", "wake.call_mode", "wake.conversational", "wake.sensitivity")
+            all_keys = (*SETTABLE, "tts.speed", "dictation.mode", "dictation.pause_media",
+                        "audio.sounds", "wake.enabled", "wake.call_mode", "wake.conversational", "wake.sensitivity")
             raise RequestError(f"cannot set {key}; settable: {', '.join(all_keys)}")
         if not isinstance(value, str) or not value:
             raise RequestError("set needs a string value")
@@ -741,10 +964,17 @@ class Daemon:
         if attr == "brain":
             asyncio.ensure_future(_quietly(old.close()))
         if key == "tts.voice":
-            self.cfg.tts.kokoro_voice = value
-            self.cfg.tts.engine = "kokoro"
-            self._persist("tts", "kokoro_voice", value, save)
-            self._persist("tts", "engine", "kokoro", save)
+            if self.cfg.tts.engine == "openai":
+                self.cfg.tts.openai_voice = value
+                self._persist("tts", "openai_voice", value, save)
+            elif self.cfg.tts.engine == "elevenlabs":
+                self.cfg.tts.elevenlabs_voice_id = value
+                self._persist("tts", "elevenlabs_voice_id", value, save)
+            else:
+                self.cfg.tts.kokoro_voice = value
+                self.cfg.tts.engine = "kokoro"
+                self._persist("tts", "kokoro_voice", value, save)
+                self._persist("tts", "engine", "kokoro", save)
         elif key == "brain.talker":
             resolved = getattr(new, "name", value) if value in ("auto", "openai") else value
             self.cfg.brain.talker = resolved

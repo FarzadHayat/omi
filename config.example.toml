@@ -20,15 +20,34 @@ call_mode = "auto"       # "auto" (smart) | "continuous" | "single"
 followup_timeout_s = 12.0  # Prolonged silence ends the conversation automatically
 chime = true             # Soft rising chime on wake, descending chime on call end
 
+[dictation]
+# Hex + Superwhisper-style hold-to-dictate (Super+Alt+D):
+# "auto" (app-aware + selection rewrite) | "raw" (instant) | "clean" | "message" | "mail" | "note" | "code"
+mode = "auto"
+pause_media = true        # auto-pause active MPRIS media while dictating and resume on release
+paste_method = "auto"     # "auto" (clipboard-preserving paste) | "paste" | "wtype"
+restore_clipboard = true  # restore previous clipboard after paste
+use_selection = true      # rewrite highlighted text when you speak an edit command in auto mode
+# [dictation.replacements]
+# "super whisper" = "Superwhisper"
+# [dictation.app_modes]
+# "github" = "code"
+
 [stt]
-engine = "nemotron"  # "nemotron" (streaming) | "moonshine"
+# Local:  "parakeet" (Parakeet TDT 0.6B v3, punctuated, 25 langs) | "nemotron" (streaming) | "moonshine"
+# Cloud:  "groq" (GROQ_API_KEY) | "deepgram" (DEEPGRAM_API_KEY) | "openai" (OPENAI_API_KEY)
+engine = "parakeet"
 threads = 4
+language = ""  # empty = auto-detect
 # Words speech recognition should boost (names, tools, jargon you say often)
 hotwords = ["Omi", "Omarchy", "Hyprland"]
 
 [tts]
-engine = "kokoro"          # "kokoro" | "piper"
+# Local:  "kokoro" (neural fp32) | "piper" (ultra-light CPU)
+# Cloud:  "openai" (gpt-4o-mini-tts, OPENAI_API_KEY) | "elevenlabs" (eleven_flash_v2_5, ELEVENLABS_API_KEY)
+engine = "kokoro"
 kokoro_voice = "af_heart"  # e.g. af_heart, af_bella, am_adam, bf_emma, bm_george
+openai_voice = "coral"     # e.g. coral, alloy, nova, sage, verse
 speed = 1.0
 
 [brain]
