@@ -8,7 +8,7 @@ Tiered by speed and reliability on Wayland / Hyprland:
      fallback when ydotool is not installed) and fast grim screenshots for multimodal
      workers.
   4. On-screen mascot pointing (`point_at` / `highlight_window`) via daemon events so
-     Omi glides to the target, looks at it, spotlights it, and shows a label.
+     Omi stays in the bottom-right corner, looks at the target, shows a large arrow pointing at it, spotlights it, and shows a label.
 """
 
 from __future__ import annotations
@@ -576,7 +576,7 @@ async def mouse_scroll(x: int, y: int, dy: int = -3) -> ToolResult:
 
 
 async def point_at(x: int, y: int, label: str = "", w: int = 0, h: int = 0, duration: int = 8) -> ToolResult:
-    """Move Omi on screen next to (x, y), look at it, highlight it, and show a label."""
+    """Show a large arrow from Omi to (x, y), look at it, highlight it, and show a label."""
     x, y = int(x), int(y)
     w, h = max(0, int(w)), max(0, int(h))
     duration = max(2, min(int(duration), 30))
@@ -593,7 +593,7 @@ async def point_at(x: int, y: int, label: str = "", w: int = 0, h: int = 0, dura
 
 
 async def highlight_window(query: str, label: str = "", duration: int = 8) -> ToolResult:
-    """Move Omi to a window on screen and highlight it."""
+    """Show a large arrow from Omi to a window on screen and highlight it."""
     hit = find_window(hypr_query("clients"), query)
     if hit is None:
         return ToolResult(False, f"I can't find a window for {query}.")
@@ -634,10 +634,10 @@ def tools() -> list[Tool]:
              lambda a: f"Click at {a.get('x')}, {a.get('y')}?", mouse_safety),
         Tool("mouse_scroll", "Scroll at logical screen coordinates (x, y); negative dy scrolls down.",
              _schema({"x": i, "y": i, "dy": i}, ["x", "y"]), "reversible", mouse_scroll),
-        Tool("point_at", "Move Omi on screen to point at coordinates (x, y) with a spotlight and optional label.",
+        Tool("point_at", "Point Omi's large on-screen arrow at coordinates (x, y) with a spotlight and optional label.",
              _schema({"x": i, "y": i, "label": s, "w": i, "h": i, "duration": i}, ["x", "y"]),
              "read", point_at),
-        Tool("highlight_window", "Move Omi on screen to point at and highlight an open window.",
+        Tool("highlight_window", "Point Omi's large on-screen arrow at an open window and highlight it.",
              _schema({"query": s, "label": s, "duration": i}, ["query"]),
              "read", highlight_window),
     ]

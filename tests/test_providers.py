@@ -29,18 +29,25 @@ def test_build_cli_invocations():
     assert "--session" in argv and "ses_1" in argv and argv[-1] == "hi"
     mcp = json.loads(env["OPENCODE_CONFIG_CONTENT"])
     assert mcp["mcp"]["omi"]["type"] == "local" and "omi.tools.mcp_server" in mcp["mcp"]["omi"]["command"]
+    assert mcp["permission"] == {"bash": "deny", "edit": "deny", "write": "deny"}
+    _, w_env = cp.build_cli_invocation("opencode", "work", role="worker")
+    assert "permission" not in json.loads(w_env["OPENCODE_CONFIG_CONTENT"])
 
     argv, env = cp.build_cli_invocation("codex", "hi", model="gpt-5-mini")
     assert argv[:4] == ["codex", "exec", "--json", "--skip-git-repo-check"]
+    assert 'sandbox_mode="read-only"' in argv
     assert "-m" in argv and "gpt-5-mini" in argv and any("mcp_servers.omi.command=" in a for a in argv)
-    argv2, _ = cp.build_cli_invocation("codex", "again", session_id="thr_9", use_mcp=False)
+    argv2, _ = cp.build_cli_invocation("codex", "again", session_id="thr_9", use_mcp=False, role="worker")
     assert argv2[:3] == ["codex", "exec", "resume"] and argv2[-2:] == ["thr_9", "again"]
+    assert 'sandbox_mode="read-only"' not in argv2
 
     argv, _ = cp.build_cli_invocation("agy", "hi", model="gemini-4-neon", effort="low", session_id="conv_2")
-    assert "--output-format" in argv and "stream-json" in argv
+    assert "--output-format" in argv and "stream-json" in argv and "--sandbox" in argv
     assert "--effort" in argv and "low" in argv
     assert "--conversation" in argv and "conv_2" in argv
     assert "--settings" in argv and argv[-1] == "-p=hi"
+    w_argv, _ = cp.build_cli_invocation("agy", "work", role="worker")
+    assert "--sandbox" not in w_argv
 
     argv, _ = cp.build_cli_invocation("gemini", "hi", model="gemini-2.5-flash", session_id="g_3")
     assert argv == ["gemini", "--output-format", "stream-json", "-m", "gemini-2.5-flash", "--resume", "g_3", "-p", "hi"]

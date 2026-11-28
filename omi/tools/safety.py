@@ -285,6 +285,22 @@ def _shell_inner(name: str, rest: list[str]) -> str | None:
     return None
 
 
+def _mise_inner(name: str, rest: list[str]) -> str | None:
+    """The command string or argv `mise exec` / `mise x` would run."""
+    if name != "mise" or not rest or rest[0] not in ("exec", "x"):
+        return None
+    tail = rest[1:]
+    if "--" in tail:
+        idx = tail.index("--")
+        return shlex.join(tail[idx + 1:]) if idx + 1 < len(tail) else ""
+    for i, w in enumerate(tail):
+        if w in ("-c", "--command"):
+            return tail[i + 1] if i + 1 < len(tail) else ""
+        if w.startswith("--command="):
+            return w.split("=", 1)[1]
+    return None
+
+
 # --- secrets ---
 
 _PASSWORD_TOOLS = {"pass", "gopass", "secret-tool", "op", "bw", "rbw", "keepassxc-cli", "kwallet-query",
@@ -316,7 +332,7 @@ def secret_reason(cmd: str, base: str | None = None, depth: int = 0) -> str | No
         name, rest = Path(words[0]).name, words[1:]
         if reason := _program_secret(name, rest):
             return reason
-        inner = _shell_inner(name, rest)
+        inner = _shell_inner(name, rest) or _mise_inner(name, rest)
         if inner and (reason := secret_reason(inner, base, depth + 1)):
             return reason
         patterns = _search_patterns(rest) if name in _SEARCHERS else set()
@@ -356,7 +372,7 @@ def _program_secret(name: str, rest: list[str]) -> str | None:
         return "it dumps the environment"
     if name in ("export", "declare", "typeset") and len(rest) == 1 and rest[0] in ("-p", "-x", "-px"):
         return "it dumps the environment"
-    if name == "mise" and rest[:1] == ["env"] or name == "launchctl" and "getenv" in rest:
+    if name == "mise" and rest[:1] in (["env"], ["e"]) or name == "launchctl" and "getenv" in rest:
         return "it dumps the environment"
     if name == "direnv" and rest[:1] and rest[0] in ("dump", "export", "exec"):
         return "it dumps the environment"
@@ -772,10 +788,16 @@ def _seg_steps(seg: _Seg, base: str | None, depth: int) -> list[Step]:
     rest = words[1:]
     steps: list[Step] = []
     inner = _shell_inner(name, rest) if words else None
+    mise_inner = _mise_inner(name, rest) if words else None
     if inner is not None:
         steps = _steps(inner, base, depth + 1)
         level: Safety = max((s.level for s in steps), key=_RANK.__getitem__, default="read")
         action = None
+    elif mise_inner is not None:
+        steps = _steps(mise_inner, base, depth + 1)
+        inner_level: Safety = max((s.level for s in steps), key=_RANK.__getitem__, default="reversible")
+        level = inner_level if _RANK[inner_level] >= _RANK["reversible"] else "reversible"
+        action = None if any(s.level != "read" for s in steps) else "run mise exec"
     elif name == "xargs":
         cmd = _positionals(rest, {"-a", "-d", "-E", "-I", "-L", "-n", "-P", "-s", "--arg-file", "--delimiter",
                                   "--max-args", "--max-procs", "--replace"})
@@ -866,7 +888,7 @@ _GUARDED_DIRS = (  # relative to home, with what a write there means
     (".config/autostart", "an autostart entry"), (".config/hypr", "the Hyprland config"),
     (".config/uwsm", "the session environment"), (".config/environment.d", "the session environment"),
     (".local/bin", "a program in your command path"), (".claude", "Claude's own settings"),
-    (".config/omi", "omi's settings"), (".config/omi", "Omi's settings"),
+    (".config/omi", "Omi's settings"),
     (".config/omarchy/hooks", "an Omarchy hook"),
     (".config/fish", "your shell startup files"), (".config/nushell", "your shell startup files"),
     (".config/git", "your git settings"), (".local/share/applications", "an app launcher entry"),

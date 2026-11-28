@@ -33,7 +33,7 @@ def test_registry_has_every_tool():
         "power", "omarchy", "screen_info", "capture_screen", "ui_inspect", "ui_action",
         "mouse_move", "mouse_click", "mouse_scroll", "point_at", "highlight_window",
         "terminal_list", "terminal_read", "terminal_run", "terminal_open",
-        "t3_threads", "t3_read", "t3_start", "t3_send", "t3_open",
+        "t3_threads", "t3_tasks", "t3_read", "t3_start", "t3_send", "t3_open",
     }
 
 
@@ -43,7 +43,7 @@ def test_safety_classes():
     assert {n for n, t in tools.items() if t.safety == "read"} == {
         "list_windows", "active_window", "clipboard_get", "current_time",
         "screen_info", "capture_screen", "ui_inspect", "point_at", "highlight_window",
-        "terminal_list", "terminal_read", "t3_threads", "t3_read"}
+        "terminal_list", "terminal_read", "t3_threads", "t3_tasks", "t3_read"}
     for t in tools.values():
         assert t.description and "\n" not in t.description and t.parameters["type"] == "object"
 
@@ -316,6 +316,7 @@ COMMANDS = [
     ("curl -X POST -d hi https://hooks.slack.com/x", "destructive"), ("bash -c 'rm -rf ~/x'", "destructive"),
     ("find . -name '*.pyc' -delete", "destructive"), ("ls && rm x", "destructive"),
     ("omarchy-update", "destructive"), ("cat .env", "destructive"), ("env", "destructive"),
+    ("mise exec -- ls", "reversible"), ("mise exec -- rm -rf build", "destructive"),
 ]
 
 
@@ -336,7 +337,10 @@ def test_mv_over_existing(tmp_path):
 @pytest.mark.parametrize("cmd", [
     "cat .env", "cat ~/project/.env.local", "cat ~/.ssh/id_ed25519", "printenv", "env | grep KEY", "env",
     "heroku config -a app", "heroku run bash", "echo $GITHUB_TOKEN", "cat ~/.config/chezmoi/age.txt",
-    "mise env", "export -p", "grep -r x ~/.aws", "less ~/.netrc", "cat ~/.fizzy.yaml", "base64 server.pem",
+    "mise env", "mise e", "mise exec -- env", "mise exec -- printenv",
+    "mise x -- python3 -c 'import os; print(os.environ)'", "mise exec -c 'printenv'",
+    "mise exec -- cat .env", "source ~/.config/secrets.env",
+    "export -p", "grep -r x ~/.aws", "less ~/.netrc", "cat ~/.fizzy.yaml", "base64 server.pem",
 ])
 def test_secret_commands(cmd):
     assert secret_reason(cmd)
@@ -439,10 +443,13 @@ async def _fake_daemon(sock: Path, answer: bool, seen: list):
     return await asyncio.start_unix_server(handle, path=str(sock))
 
 
-async def test_mcp_server_confirm_through_daemon(tmp_path):
+async def test_mcp_server_confirm_through_daemon():
+    import shutil
+    import tempfile
     from mcp import Client
 
-    sock = tmp_path / "d.sock"
+    sock_dir = Path(tempfile.mkdtemp(prefix="om", dir="/tmp"))
+    sock = sock_dir / "d.sock"
     seen: list = []
     server = await _fake_daemon(sock, True, seen)
     try:
@@ -456,6 +463,7 @@ async def test_mcp_server_confirm_through_daemon(tmp_path):
     finally:
         server.close()
         await server.wait_closed()
+        shutil.rmtree(sock_dir, ignore_errors=True)
 
 
 async def test_approvals_are_single_use():
@@ -472,6 +480,45 @@ async def test_approvals_are_single_use():
     out = await approve("mcp__omi__power", {"action": "reboot"}, reg, approvals, ask)
     assert out == {"behavior": "allow"} and asked == ["Really reboot the computer?"]
     assert approvals.take("Really reboot the computer?") and not approvals.take("Really reboot the computer?")
+
+
+async def test_unattended_worker_runs_risky_steps_but_never_reads_secrets():
+    from omi.tools.mcp_server import Approvals, approve, role_from_argv
+
+    reg = build_registry(Config())
+    asked = []
+
+    async def ask(q, detail=""):
+        asked.append(q)
+        return False
+
+    for name, inp in [("Bash", {"command": "git push"}), ("Bash", {"command": "rm -rf ~/Work/old-build"}),
+                      ("mcp__omi__power", {"action": "reboot"})]:
+        assert await approve(name, inp, reg, Approvals(), ask, unattended=True) == {"behavior": "allow"}
+    for inp in [{"command": "cat ~/.env"}, {"command": "cat ~/.ssh/id_ed25519"}]:
+        out = await approve("Bash", inp, reg, Approvals(), ask, unattended=True)
+        assert out["behavior"] == "deny"
+    assert asked == []
+    assert role_from_argv(["--role", "worker"]) == "worker"
+    assert role_from_argv([]) == "talker" and role_from_argv(["--role"]) == "talker"
+
+
+async def test_only_the_worker_skips_asking(tmp_path, monkeypatch):
+    from omi.tools import mcp_server
+
+    built = []
+    cfg = Config()
+    cfg.brain.worker_mode = "unrestricted"
+    monkeypatch.setattr(mcp_server.config, "load", lambda: cfg)
+    monkeypatch.setattr(mcp_server.config, "SOCKET_PATH", tmp_path / "no-daemon.sock")
+    monkeypatch.setattr(mcp_server, "build_registry", lambda c: built.append(build_registry(c)) or built[-1])
+    mcp_server.build_server("talker")
+    mcp_server.build_server("worker")
+    talker, worker = built
+    assert await talker.confirm("Really reboot the computer?") is False  # nobody to say yes
+    assert await worker.confirm("Really reboot the computer?") is True
+    cfg.brain.worker_mode = "auto"  # switched in Settings: the running worker asks again
+    assert await worker.confirm("Really reboot the computer?") is False
 
 
 # --- safety fixes: each case was auto-allowed before ---
@@ -729,3 +776,75 @@ async def test_mcp_server_returns_image_content_for_capture_screen(tmp_path, mon
         {"type": "text", "text": "Captured screen"},
         {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "AA=="}},
     ]) == "Captured screen"
+
+
+async def test_worker_mode_is_a_saved_user_setting(tmp_path):
+    from omi.daemon import Daemon, RequestError
+    from omi.session import Session
+    from omi.tools.base import ToolRegistry
+    from tests.fakes import CaptureOut, FakeBrain, FakeSTT, FakeTTS
+
+    cfg = Config()
+    assert cfg.brain.worker_mode == "auto"  # safer default for everyone else
+    path = tmp_path / "config.toml"
+    session = Session(stt=FakeSTT(), tts=FakeTTS(), brain=FakeBrain(lambda _: []), registry=ToolRegistry(),
+                      router=lambda _: None, out=CaptureOut(), state_dir=tmp_path)
+    daemon = Daemon(session, cfg, socket_path=tmp_path / "s.sock", config_path=path)
+    rep = await daemon._set("brain.worker_mode", "unrestricted")  # no save flag: saved anyway
+    assert rep["value"] == "unrestricted" and 'worker_mode = "unrestricted"' in path.read_text()
+    assert daemon._brain_info()["worker_mode"] == "unrestricted"
+    with pytest.raises(RequestError, match="auto, unrestricted"):
+        await daemon._set("brain.worker_mode", "yolo")
+
+
+def test_t3_task_states_in_plain_words():
+    from datetime import datetime, timezone
+
+    from omi.tools.dev import STUCK_AFTER_S, describe_task
+
+    now = datetime(2026, 11, 28, 4, 0, tzinfo=timezone.utc).timestamp()
+
+    def at(seconds_ago):
+        return datetime.fromtimestamp(now - seconds_ago, timezone.utc).isoformat().replace("+00:00", "Z")
+
+    def state(status, ago=60, reply=""):
+        return describe_task({"title": "T", "status": status, "updatedAt": at(ago)}, reply, now)
+
+    done = state("completed", reply="I raised the line limit from 2 to 4.\n\n- **Where:** the bubble.")
+    assert done["state"] == "done" and done["said"] == "done: I raised the line limit from 2 to 4."
+    assert state("running", 120)["said"] == "still running, last active 2 minutes ago"
+    assert state("running", STUCK_AFTER_S + 300)["state"] == "stuck"
+    assert state("waiting")["said"] == "waiting for an answer from you"
+    assert state("interrupted")["said"] == "stopped before it finished"
+    assert state("failed")["state"] == "failed"
+
+
+async def test_t3_tasks_checks_the_threads_omi_started(tmp_path, monkeypatch):
+    import json as _json
+    import time as _time
+
+    from omi.tools import dev
+
+    ledger = tmp_path / "tasks.json"
+    dev.remember_task("t-old", "Ancient job", ledger)
+    tasks = _json.loads(ledger.read_text())
+    tasks[0]["started"] = _time.time() - 3 * 86400  # not from today
+    ledger.write_text(_json.dumps(tasks))
+    dev.remember_task("t-1", "Webcam selector", ledger)
+    dev.remember_task("t-2", "Bubble fix", ledger)
+    shows = {
+        "t-1": {"thread": {"title": "Webcam selector", "status": "interrupted", "updatedAt": "2026-11-28T01:33:50Z"},
+                "messages": []},
+        "t-2": {"thread": {"title": "Bubble fix", "status": "completed", "updatedAt": "2026-11-28T01:44:18Z"},
+                "messages": [{"role": "assistant", "text": "Raised it from 2 to 4 lines. Details follow."}]},
+    }
+
+    async def fake_run(argv, timeout=0):
+        return 0, _json.dumps(shows[argv[-1]]), ""
+
+    monkeypatch.setattr(dev, "_require_t3", lambda: "/usr/bin/t3")
+    monkeypatch.setattr(dev, "run", fake_run)
+    res = await dev.t3_tasks(ledger)
+    assert res.text == ("2 tasks from today. Bubble fix: done: Raised it from 2 to 4 lines. "
+                        "Webcam selector: stopped before it finished.")
+    assert [t["state"] for t in res.data["tasks"]] == ["done", "stopped"]

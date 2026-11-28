@@ -49,7 +49,7 @@ Panel {
   property bool settingsOpen: false
   // Stop only shows while there is something to stop.
   readonly property bool busy: ["listening", "thinking", "speaking", "acting", "confirming"].indexOf(phase) >= 0
-  readonly property var rows: (omi.confirm ? ["yes", "no"] : []).concat(busy ? ["input", "stop"] : ["input"])
+  readonly property var rows: (omi.confirm ? ["yes", "no"] : []).concat(busy ? ["input", "stop", "wake", "settings"] : ["input", "wake", "settings"])
   readonly property string currentRow: cursorActive ? rows[Math.max(0, Math.min(rowIndex, rows.length - 1))] : ""
 
   readonly property var installedProviders: {
@@ -243,6 +243,8 @@ Panel {
     else if (id === "no") omi.answer(false)
     else if (id === "input") focusInput()
     else if (id === "stop") omi.stop()
+    else if (id === "wake") omi.toggleWake()
+    else if (id === "settings") root.settingsOpen = !root.settingsOpen
   }
 
   function focusInput() {
@@ -328,7 +330,7 @@ Panel {
       id: keyCatcher
       anchors.fill: parent
       clip: true
-      blocked: input.activeFocus || customModelField.activeFocus
+      blocked: input.activeFocus || customModelField.activeFocus || customWorkerBackupField.activeFocus
       onMoveRequested: function(dx, dy) { if (dy !== 0) root.moveCursor(dy) }
       onActivateRequested: if (root.cursorActive) root.activate(root.currentRow)
       onCloseRequested: root.close()
@@ -638,8 +640,10 @@ Panel {
             text: omi.wakeEnabled ? strings.t("wake.on") : strings.t("wake.off")
             bordered: true
             enabled: omi.connected
+            hasCursor: root.currentRow === "wake"
             foreground: omi.wakeEnabled ? Commons.Color.accent : root.dim
             fontFamily: root.fontFamily
+            onHovered: function(on) { if (on) root.setRowCursor("wake") }
             onClicked: omi.toggleWake()
             Accessible.role: Accessible.Button
             Accessible.name: text
@@ -652,8 +656,10 @@ Panel {
             text: strings.t("settings.button")
             bordered: true
             enabled: omi.connected
+            hasCursor: root.currentRow === "settings"
             foreground: root.settingsOpen ? Commons.Color.accent : root.dim
             fontFamily: root.fontFamily
+            onHovered: function(on) { if (on) root.setRowCursor("settings") }
             onClicked: root.settingsOpen = !root.settingsOpen
             Accessible.role: Accessible.Button
             Accessible.name: strings.t("settings.title")
@@ -893,6 +899,22 @@ Panel {
                 Accessible.name: strings.t("settings.worker_model")
               }
 
+              Dropdown {
+                objectName: "workerModeDropdown"
+                visible: root.worker !== "" && root.worker !== "off"
+                Layout.fillWidth: true
+                label: strings.t("settings.worker_mode")
+                fontFamily: root.fontFamily
+                background: root.dropdownBackground
+                options: [{ value: "auto", label: strings.t("settings.worker_mode_auto") },
+                          { value: "unrestricted", label: strings.t("settings.worker_mode_unrestricted") }]
+                readonly property string bound: (omi.brain && omi.brain.worker_mode) || "auto"
+                value: bound
+                onBoundChanged: value = bound
+                onChanged: function(v) { if (v !== bound) omi.setSetting("brain.worker_mode", v) }
+                Accessible.name: strings.t("settings.worker_mode")
+              }
+
               Text {
                 objectName: "workerFallbackNotice"
                 visible: text !== ""
@@ -1099,6 +1121,88 @@ Panel {
                 onBoundChanged: value = bound
                 onChanged: function(v) { if (v !== omi.wakeSensitivity) omi.setSetting("wake.sensitivity", v) }
                 Accessible.name: strings.t("settings.sensitivity")
+              }
+
+              // Look to talk: the webcam tells when you are talking to Omi
+              RowLayout {
+                Layout.fillWidth: true
+                spacing: Style.space(8)
+
+                Text {
+                  textFormat: Text.PlainText
+                  text: strings.t("settings.look")
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+
+                Item { Layout.fillWidth: true }
+
+                Button {
+                  objectName: "lookTuneButton"
+                  text: omi.tuning ? strings.t("settings.tune_cancel") : strings.t("settings.tune")
+                  bordered: true
+                  foreground: omi.tuning ? Commons.Color.urgent : root.dim
+                  fontFamily: root.fontFamily
+                  onClicked: omi.tuning ? omi.cancelLookTune() : omi.openLookTune()
+                  Accessible.role: Accessible.Button
+                  Accessible.name: omi.tuning ? strings.t("settings.tune_cancel_name") : strings.t("settings.tune_name")
+                }
+
+                Button {
+                  objectName: "lookButton"
+                  text: omi.lookToTalk ? strings.t("settings.on") : strings.t("settings.off")
+                  bordered: true
+                  foreground: omi.lookToTalk ? Commons.Color.accent : root.dim
+                  fontFamily: root.fontFamily
+                  onClicked: omi.toggleLook()
+                  Accessible.role: Accessible.Button
+                  Accessible.name: strings.t("settings.look") + ": " + text
+                }
+              }
+
+              // Only my voice: ignore people who did not save their voice
+              RowLayout {
+                Layout.fillWidth: true
+                spacing: Style.space(8)
+
+                Text {
+                  textFormat: Text.PlainText
+                  text: strings.t("settings.my_voice")
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+
+                Item { Layout.fillWidth: true }
+
+                Button {
+                  objectName: "myVoiceButton"
+                  text: omi.onlyMyVoice ? strings.t("settings.on") : strings.t("settings.off")
+                  bordered: true
+                  foreground: omi.onlyMyVoice ? Commons.Color.accent : root.dim
+                  fontFamily: root.fontFamily
+                  onClicked: omi.toggleMyVoice()
+                  Accessible.role: Accessible.Button
+                  Accessible.name: strings.t("settings.my_voice") + ": " + text
+                }
+              }
+
+              // Which webcam watches, only worth asking with more than one
+              Dropdown {
+                objectName: "cameraDropdown"
+                visible: omi.cameras.length > 1
+                Layout.fillWidth: true
+                label: strings.t("settings.camera")
+                fontFamily: root.fontFamily
+                background: root.dropdownBackground
+                options: [{ value: "", label: strings.t("settings.camera_auto") }].concat(
+                  omi.cameras.map(function(c) { return { value: c.id, label: c.name } }))
+                readonly property string bound: omi.lookCamera
+                value: bound
+                onBoundChanged: value = bound
+                onChanged: function(v) { if (v !== omi.lookCamera) omi.setSetting("wake.camera", v === "" ? "auto" : v) }
+                Accessible.name: strings.t("settings.camera")
               }
 
               // Cute sound effects toggle

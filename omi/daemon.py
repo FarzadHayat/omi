@@ -7,6 +7,10 @@ new one cancels the running one (the Session enforces that).
 Every connection has its own bounded outbox, so a client that stops reading never
 slows a turn or the stop command: once its outbox is full it is dropped.
 
+A stop (systemctl restart after an update, say) waits for a pause in the conversation,
+up to RESTART_WAIT_S, and hands the conversation to the next daemon through a file in
+the state directory, so a restart costs a few seconds of Omi, not the conversation.
+
 Only the user answers a yes/no question: a "confirm" must name the question's id and
 come from a same-user process that is not one the daemon started (Claude and its
 shell are), and while a question waits those processes cannot start turns either.
@@ -15,6 +19,7 @@ shell are), and while a question waits those processes cannot start turns either
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -22,7 +27,7 @@ import signal
 import socket
 import struct
 from collections.abc import Awaitable, Callable
-from time import monotonic
+from time import monotonic, time
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +37,7 @@ import soundfile as sf
 from omi import config
 from omi.audio.base import AudioIn, AudioOut
 from omi.config import Config
+from omi.events import State
 from omi.protocol import COMMANDS
 from omi.session import Session
 from omi.stt import available_stt_engines
@@ -44,6 +50,10 @@ log = logging.getLogger(__name__)
 Factory = Callable[[str], Awaitable[Any]]
 Job = Callable[[], Awaitable[Any]]
 # Settable keys and the Session attribute each one swaps.
+WORKER_MODES = ("auto", "unrestricted")  # brain.worker_mode
+# Look to talk numbers `omi look-tune` sets, with the range each may take.
+LOOK_TUNING = {"wake.lip_threshold": (0.005, 0.2), "wake.yaw_center": (-1.0, 1.0), "wake.yaw_range": (0.1, 0.8)}
+
 SETTABLE = {
     "brain.talker": "brain",
     "brain.model": "brain",
@@ -74,6 +84,12 @@ WAV_CHUNK = 1600  # samples, 100 ms: wav files go through the same path as live 
 IDLE_JOB_GRACE_S = 2.0  # idle jobs start only after this much quiet
 IDLE_POLL_S = 0.25
 TURN_CMDS = ("say", "wav", "ptt_start", "ptt_stop")
+# A stop waits this long for the user and Omi to pause before it cuts in anyway. Well
+# under systemd's 90 s stop timeout, and short enough that logging out never hangs long.
+RESTART_WAIT_S = 30.0
+RESTART_QUIET_S = 0.3  # the pause must last this long (a turn starting has tiny gaps)
+RESTART_POLL_S = 0.05
+HANDOFF_FILE = "handoff.json"
 
 
 class Conn:
@@ -189,6 +205,10 @@ class Daemon:
         self.cfg = cfg
         self.config_path = config_path  # when set, `set` with save=true persists to this TOML file
         self.play_sfx = play_sfx
+        self.voiceprints: Any = None  # omi.voice_id.Voiceprints, made on first use
+        from omi.look_setup import GuidedSetup
+
+        self.look_setup = GuidedSetup(self)  # Omi tunes look to talk with you, out loud
         self.audio_in = audio_in
         self.factories = factories or {}
         self.wav_out = wav_out
@@ -212,6 +232,9 @@ class Daemon:
         self._cursor_task: asyncio.Task[None] | None = None
         self._jobs: list[asyncio.Task[Any]] = []
         self._stopping = asyncio.Event()
+        self._drain_task: asyncio.Task[None] | None = None
+        self._resume_call = False  # the previous daemon stopped in the middle of a call
+        self._started_at = monotonic()
         session.emit = self.broadcast
 
     # --- lifecycle ---------------------------------------------------------------
@@ -237,6 +260,13 @@ class Daemon:
             except OSError as exc:  # a busy port must not take the voice loop down
                 log.error("phone page failed to start: %s", exc)
                 self.errors["web"] = str(exc)
+        self._take_handoff()
+        if self.wake is not None and (self.cfg.wake.enabled or self.cfg.wake.look_to_talk) \
+                and hasattr(self.wake, "listen_early"):
+            try:  # hear what is said while the models load; the listener catches up once ready
+                await self.wake.listen_early()
+            except Exception as exc:
+                log.warning("could not open the mic early: %s", exc)
         await self.session.start()
         self._warm_task = asyncio.create_task(self._warm())
         if self.track_cursor:
@@ -272,10 +302,13 @@ class Daemon:
                 log.error("warm-up of %s failed: %s", name, r)
                 self.errors[name] = str(r) or type(r).__name__
         self.ready.set()
-        if self.wake is not None and self.cfg.wake.enabled:
+        log.info("ready %.1f s after start", monotonic() - self._started_at)
+        if self.wake is not None and (self.cfg.wake.enabled or self.cfg.wake.look_to_talk):
             try:
+                if self._resume_call and hasattr(self.wake, "resume_call"):
+                    self.wake.resume_call()
                 await self.wake.start()
-                await self.broadcast({"event": "wake", "enabled": True})
+                await self.broadcast({"event": "wake", "enabled": self.cfg.wake.enabled})
             except Exception as exc:
                 log.error("wake word failed to start: %s", exc)
                 self.errors["wake"] = str(exc) or type(exc).__name__
@@ -306,23 +339,68 @@ class Daemon:
                 return
 
     async def run(self) -> None:
-        """Serve until SIGTERM or SIGINT, then shut down cleanly."""
+        """Serve until SIGTERM or SIGINT. The first one waits for a pause in the
+        conversation (bounded), a second one stops at once. The conversation is handed
+        to the next daemon."""
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(sig, self._stopping.set)
+            loop.add_signal_handler(sig, self._on_stop_signal)
         try:
             await self.start()
             log.info("omi daemon listening on %s", self.socket_path)
             await self._stopping.wait()
         finally:
-            await self.close()
+            if self._drain_task is not None:
+                self._drain_task.cancel()
+            await self.close(handoff=True)
             for sig in (signal.SIGTERM, signal.SIGINT):
                 loop.remove_signal_handler(sig)
+
+    def _on_stop_signal(self) -> None:
+        if self._drain_task is None:
+            self._drain_task = asyncio.create_task(self._stop_when_quiet())
+        else:
+            self._stopping.set()
+
+    def quiet(self) -> bool:
+        """Nothing a restart would cut: no turn, speech, question or request being spoken.
+        An open call mic that has heard nothing yet counts as quiet; the call resumes."""
+        s = self.session
+        if self._listening or s._turn is not None or s.pending_confirm is not None:
+            return False
+        if s.state is State.IDLE:
+            return s._utt is None
+        if s.state is State.LISTENING:
+            return s._utt is not None and bool(getattr(self.wake, "waiting_for_speech", False))
+        return False
+
+    async def _stop_when_quiet(self) -> None:
+        deadline = monotonic() + RESTART_WAIT_S
+        quiet_since: float | None = None
+        told = False
+        while monotonic() < deadline:
+            now = monotonic()
+            if self.quiet():
+                quiet_since = quiet_since or now
+                if now - quiet_since >= RESTART_QUIET_S:
+                    break
+            else:
+                quiet_since = None
+                if not told:
+                    told = True
+                    log.info("stop requested mid-conversation; waiting up to %.0f s for a pause", RESTART_WAIT_S)
+            await asyncio.sleep(RESTART_POLL_S)
+        else:
+            log.warning("conversation did not pause in %.0f s; stopping anyway", RESTART_WAIT_S)
+        self._stopping.set()
 
     def request_stop(self) -> None:
         self._stopping.set()
 
-    async def close(self) -> None:
+    async def close(self, *, handoff: bool = False) -> None:
+        """Shut down. With handoff, the conversation is saved for the next daemon instead
+        of being closed (and digested into memory) now, which also makes stopping quick."""
+        in_call = bool(self.wake is not None and getattr(self.wake, "conversing", False))
         if self._server is not None:
             self._server.close()
         for c in list(self._subs):
@@ -330,6 +408,7 @@ class Daemon:
         self._subs.clear()
         if self.web is not None:
             await _quietly(self.web.close())
+        await _quietly(self.look_setup.cancel())
         if self.wake is not None:
             await _quietly(self.wake.stop())
         if self._warm_task is not None:
@@ -341,7 +420,8 @@ class Daemon:
         if self._listening and self.audio_in is not None:
             await _quietly(self.audio_in.stop())
         await _quietly(self.session.close())
-        await self._end_session_job()
+        if not (handoff and self._save_handoff(in_call)):
+            await self._end_session_job()
         await _quietly(self.session.out.stop())
         await _quietly(self.session.brain.close())
         if self.session.worker is not None:
@@ -354,6 +434,62 @@ class Daemon:
                 self.socket_path.unlink()
             except FileNotFoundError:
                 pass
+
+    @property
+    def handoff_path(self) -> Path:
+        return self.session.state_dir / HANDOFF_FILE
+
+    def _save_handoff(self, in_call: bool) -> bool:
+        """Write the conversation for the next daemon. True when it was saved."""
+        snap = self.session.snapshot()
+        if not snap["transcript"] and not in_call:
+            return False
+        snap.update(saved_at=time(), in_call=in_call)
+        path = self.handoff_path
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)  # it holds what was said
+            with os.fdopen(fd, "w") as fh:
+                json.dump(snap, fh)
+            os.replace(tmp, path)
+        except OSError as exc:
+            log.warning("could not save the conversation for the next start: %s", exc)
+            return False
+        log.info("conversation %s handed to the next start", snap["session_id"])
+        return True
+
+    def _take_handoff(self) -> None:
+        """Carry on the conversation the previous daemon saved, if it is still fresh.
+        A stale one is closed and digested into memory once nobody is talking."""
+        path = self.handoff_path
+        try:
+            snap = json.loads(path.read_text())
+        except FileNotFoundError:
+            return
+        except (OSError, ValueError) as exc:
+            log.warning("ignoring an unreadable conversation handoff: %s", exc)
+            snap = None
+        with contextlib.suppress(OSError):
+            path.unlink()
+        if not isinstance(snap, dict):
+            return
+        try:
+            idle_s = max(0.0, time() - float(snap.get("saved_at", 0))) + float(snap.get("idle_s", 0))
+        except (TypeError, ValueError):
+            return
+        s = self.session
+        if idle_s < s.idle_timeout:
+            s.restore(snap, idle_s)
+            self._resume_call = bool(snap.get("in_call"))
+            log.info("carrying on conversation %s (%d lines)", s.session_id, len(s.transcript))
+            return
+        lines = [m for m in snap.get("transcript") or [] if isinstance(m, dict)]
+        end = s.on_session_end
+        if lines and end is not None:
+            sid = str(snap.get("session_id") or "")
+            text = "\n".join(f"{m.get('role')}: {m.get('content')}" for m in lines)
+            self.idle_jobs.append(lambda: end(sid, text))
 
     async def _end_session_job(self) -> None:
         """Digest the conversation before the daemon goes, bounded so stopping stays quick."""
@@ -468,7 +604,10 @@ class Daemon:
             if not len(pcm) and mic_error:
                 final["error"] = f"no audio came in: {mic_error}"
             return final
+        if cmd == "look_tune":
+            return {"ok": True, "text": self.look_setup.start()}
         if cmd == "stop":
+            await self.look_setup.cancel()
             if await self.release_mic() or s._utt is not None:
                 await s.cancel_utterance()
             await s.stop()
@@ -564,6 +703,8 @@ class Daemon:
             errors["speaker"] = out_error
         if self.wake is not None and getattr(self.wake, "error", None):
             errors["wake"] = self.wake.error
+        if self.wake is not None and getattr(self.wake, "look_error", None):
+            errors["look"] = self.wake.look_error
         from omi.brain.cli_providers import available_providers
 
         talker = self.cfg.brain.talker
@@ -593,7 +734,14 @@ class Daemon:
                 "threshold": self.cfg.wake.threshold,
                 "sensitivity": sensitivity_label(self.cfg.wake.threshold),
                 "phrases": list(self.cfg.wake.phrases),
+                "look_to_talk": self._look_on(),
+                "look_paused_by": str(getattr(self.wake, "look_paused_by", "") or "") if self.wake else "",
+                "lip_check": self.cfg.wake.lip_check,
+                "only_my_voice": self.cfg.wake.only_my_voice,
+                "voices": self._voices().names(),
+                "camera": self.cfg.wake.camera,
             },
+            "cameras": self._cameras(),
             "engines": {
                 "stt": self.cfg.stt.engine,
                 "tts": self.cfg.tts.engine,
@@ -615,6 +763,34 @@ class Daemon:
                 config.save_override(section, key, value, self.config_path)
             except Exception as exc:
                 log.warning("could not save %s.%s to %s: %s", section, key, self.config_path, exc)
+
+    def _voices(self) -> Any:
+        if self.voiceprints is None:
+            from omi.voice_id import Voiceprints
+
+            self.voiceprints = Voiceprints()
+        return self.voiceprints
+
+    def _cameras(self) -> list[dict[str, str]]:
+        from omi.look import list_cameras
+
+        try:
+            return list_cameras()
+        except Exception:
+            log.debug("could not list cameras", exc_info=True)
+            return []
+
+    def _look_on(self) -> bool:
+        return bool(self.cfg.wake.look_to_talk and self.wake is not None
+                    and getattr(self.wake, "looking_active", False))
+
+    async def _sync_listener(self) -> None:
+        """The listener runs for the wake word, look to talk, or both."""
+        assert self.wake is not None
+        if self.cfg.wake.enabled or self.cfg.wake.look_to_talk:
+            await self.wake.start()
+        else:
+            await self.wake.stop()
 
     def _call_mode(self) -> str:
         from omi.audio.wake import effective_call_mode
@@ -644,7 +820,14 @@ class Daemon:
                 "conversational": mode != "single",
                 "threshold": self.cfg.wake.threshold,
                 "sensitivity": sensitivity_label(self.cfg.wake.threshold),
+                "look_to_talk": self._look_on(),
+                "look_paused_by": str(getattr(self.wake, "look_paused_by", "") or "") if self.wake else "",
+                "lip_check": self.cfg.wake.lip_check,
+                "only_my_voice": self.cfg.wake.only_my_voice,
+                "voices": self._voices().names(),
+                "camera": self.cfg.wake.camera,
             },
+            "cameras": self._cameras(),
             "audio": {
                 "sounds": self.cfg.audio.sounds,
             },
@@ -668,6 +851,7 @@ class Daemon:
             "worker_fallbacks": list(self.cfg.brain.worker_fallbacks),
             "worker_active": getattr(worker, "active_entry", "") or info.get("worker", ""),
             "worker_fallback_reason": getattr(worker, "fallback_reason", ""),
+            "worker_mode": self.cfg.brain.worker_mode,
         })
         return info
 
@@ -714,21 +898,94 @@ class Daemon:
             if self.wake is None:
                 raise RequestError("wake.enabled cannot be changed live (no wake listener)")
             want = self._parse_bool(value, key)
-            if want:
-                try:
-                    await self.wake.start()
-                except Exception as exc:
-                    self.errors["wake"] = str(exc) or type(exc).__name__
-                    raise RequestError(f"could not start wake word: {exc}") from exc
-                self.errors.pop("wake", None)
-            else:
-                await self.wake.stop()
-                self.errors.pop("wake", None)
             self.cfg.wake.enabled = want
+            try:
+                await self._sync_listener()
+            except Exception as exc:
+                self.cfg.wake.enabled = False
+                self.errors["wake"] = str(exc) or type(exc).__name__
+                raise RequestError(f"could not start wake word: {exc}") from exc
+            self.errors.pop("wake", None)
             self._persist("wake", "enabled", want, save)
             await self.broadcast({"event": "wake", "enabled": want})
             await self.broadcast(self._settings_event())
             return {"ok": True, "key": key, "value": "on" if want else "off"}
+        if key == "wake.look_to_talk":
+            if self.wake is None:
+                raise RequestError("wake.look_to_talk cannot be changed live (no wake listener)")
+            want = self._parse_bool(value, key)
+            self.cfg.wake.look_to_talk = want
+            try:
+                await self._sync_listener()
+            except Exception as exc:
+                self.cfg.wake.look_to_talk = False
+                with contextlib.suppress(Exception):
+                    await self._sync_listener()
+                raise RequestError(f"could not start look to talk: {exc}") from exc
+            self._persist("wake", "look_to_talk", want, save)
+            await self.broadcast(self._settings_event())
+            return {"ok": True, "key": key, "value": "on" if want else "off"}
+        if key == "brain.worker_mode":
+            raw = str(value).strip().lower() if isinstance(value, str) else ""
+            if raw not in WORKER_MODES:
+                raise RequestError(f"brain.worker_mode expects {', '.join(WORKER_MODES)}")
+            self.cfg.brain.worker_mode = raw
+            # Always saved: the worker's permission check reads it from the config file.
+            self._persist("brain", "worker_mode", raw, True)
+            await self.broadcast(self._settings_event())
+            return {"ok": True, "key": key, "value": raw}
+        if key == "wake.only_my_voice":
+            want = self._parse_bool(value, key)
+            if want and not self._voices().names():
+                raise RequestError("No voice saved yet. Run `omi look-tune` (Tune in Settings) to save yours first.")
+            if not want:
+                self._voices().forget()  # a voiceprint is only kept while it is used
+            self.cfg.wake.only_my_voice = want
+            self._persist("wake", "only_my_voice", want, save)
+            await self.broadcast(self._settings_event())
+            return {"ok": True, "key": key, "value": "on" if want else "off"}
+        if key in LOOK_TUNING:
+            lo, hi = LOOK_TUNING[key]
+            try:
+                num = float(value)
+            except (TypeError, ValueError) as exc:
+                raise RequestError(f"{key} expects a number from {lo} to {hi}") from exc
+            if not lo <= num <= hi:
+                raise RequestError(f"{key} expects a number from {lo} to {hi}")
+            setattr(self.cfg.wake, key.removeprefix("wake."), num)
+            if self.wake is not None and hasattr(self.wake, "reload_look"):
+                await self.wake.reload_look()
+            self._persist("wake", key.removeprefix("wake."), num, save)
+            await self.broadcast(self._settings_event())
+            return {"ok": True, "key": key, "value": f"{num:g}"}
+        if key == "wake.lip_check":
+            want = self._parse_bool(value, key)
+            self.cfg.wake.lip_check = want
+            if self.wake is not None and hasattr(self.wake, "reload_look"):
+                try:
+                    await self.wake.reload_look()
+                except Exception as exc:
+                    raise RequestError(f"could not restart look to talk: {exc}") from exc
+            self._persist("wake", "lip_check", want, save)
+            await self.broadcast(self._settings_event())
+            return {"ok": True, "key": key, "value": "on" if want else "off"}
+        if key == "wake.camera":
+            raw = str(value).strip() if isinstance(value, str) else ""
+            if raw.lower() in ("auto", "default"):
+                raw = ""
+            cameras = self._cameras()
+            if raw and raw not in {c["id"] for c in cameras}:
+                names = ", ".join(f'{c["name"]} ({c["id"]})' for c in cameras) or "none found"
+                raise RequestError(f"no camera {raw}; cameras: auto, {names}")
+            self.cfg.wake.camera = raw
+            if self.wake is not None and hasattr(self.wake, "reload_look"):
+                try:
+                    await self.wake.reload_look()
+                except Exception as exc:
+                    raise RequestError(f"could not switch camera: {exc}") from exc
+            self._persist("wake", "camera", raw, save)
+            await self.broadcast(self._settings_event())
+            return {"ok": True, "key": key, "value": raw or "auto"}
         if key == "wake.call_mode":
             raw = str(value).strip().lower() if isinstance(value, str) else ""
             if raw == "smart":
@@ -772,7 +1029,7 @@ class Daemon:
             await self.broadcast(self._settings_event())
             return {"ok": True, "key": key, "value": label}
         if key not in SETTABLE:
-            all_keys = (*SETTABLE, "tts.speed", "audio.sounds", "wake.enabled",
+            all_keys = (*SETTABLE, "tts.speed", "audio.sounds", "wake.enabled", "wake.look_to_talk", "wake.lip_check", "wake.only_my_voice", *LOOK_TUNING, "wake.camera", "brain.worker_mode",
                         "wake.call_mode", "wake.conversational", "wake.sensitivity")
             raise RequestError(f"cannot set {key}; settable: {', '.join(all_keys)}")
         if not isinstance(value, str) or (

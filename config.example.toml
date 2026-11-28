@@ -1,4 +1,4 @@
-# Omi configuration — copy to ~/.config/omi/config.toml
+# Omi configuration: copy to ~/.config/omi/config.toml
 # Every option below shows its default value; omit anything you don't want to change.
 
 name = "Omi"
@@ -9,7 +9,7 @@ sink = ""          # PipeWire output sink; empty = default output ("null" = sile
 silence_ms = 300   # Hands-free silence window in milliseconds
 sounds = true      # Cute soft-bell UI & voice sound effects (wake, heard, acting, confirm, done, sleep)
 echo_cancel = true # Cancel Omi's own voice from the mic (PipeWire WebRTC echo canceller)
-barge_in = true    # Talk over Omi to interrupt it mid-sentence (needs echo_cancel or headphones)
+barge_in = true    # Talk over Omi to interrupt it; "mm-hm" lets it carry on (needs echo_cancel or headphones)
 
 [wake]
 enabled = true
@@ -21,6 +21,14 @@ initial_timeout_s = 15.0 # Cancel if nothing is said right after waking Omi
 call_mode = "auto"       # "auto" (smart) | "continuous" | "single"
 followup_timeout_s = 0.0   # Silence timeout in call mode (0 = never dismiss on silence alone)
 chime = true             # Soft rising chime on wake, descending chime on call end
+look_to_talk = false     # Webcam: talk while facing the screen, no wake word needed
+lip_check = true         # Look to talk also needs your lips moving (a video on screen won't count)
+only_my_voice = false    # Only answer voices saved with `omi look-tune` (stays on this PC; deleted when off)
+# Set for you by `omi look-tune`:
+lip_threshold = 0.03     # How much lip movement counts as talking
+yaw_center = 0.0         # Head turn that means "facing the screen" (0 = webcam on that screen)
+yaw_range = 0.35         # How far from that you can turn and still count as facing it
+camera = ""              # Webcam for look to talk: "" = first camera, or an id from `omi set wake.camera ?`
 
 [stt]
 # Local:  "parakeet" (Parakeet TDT 0.6B v3, punctuated, 25 langs) | "nemotron" (streaming) | "moonshine"
@@ -48,6 +56,9 @@ worker = "claude"
 # Backups, in order, when the talker fails before answering (usage limit, expired login).
 # "provider" or "provider:model". A failed brain sits out 15 minutes, then gets retried.
 fallbacks = ["opencode", "local"]
+# Background worker: "auto" asks before risky steps, "unrestricted" never asks.
+# Reading keys, tokens and .env files stays blocked either way.
+worker_mode = "auto"
 
 [brain.claude]
 model = "haiku"

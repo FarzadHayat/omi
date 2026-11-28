@@ -2,7 +2,7 @@
 conversation mode using sherpa-onnx KeywordSpotter and Silero VAD.
 
 Runs completely locally on CPU (~1.7% of one core) using the 3.3M GigaSpeech
-streaming Zipformer KWS model. Once woken, Omi stays in conversational mode —
+streaming Zipformer KWS model. Once woken, Omi stays in conversational mode,
 automatically listening again after every response until you say a farewell
 ("goodbye", "see ya", "that's all", "stop listening", ...) or stay silent for
 `followup_timeout_s` seconds.
@@ -21,6 +21,7 @@ import tempfile
 import urllib.request
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from pathlib import Path
 from time import monotonic
 from typing import Any, Protocol
@@ -62,11 +63,22 @@ POST_SPEECH_COOLDOWN_S = 0.55
 # Talking over Omi: this many 32 ms chunks of steady speech (after the VAD's own onset)
 # interrupt it, about 0.3 s, long enough to skip a cough or an "mm-hm" click.
 BARGE_IN_CHUNKS = 6
+EARLY_MAX_S = 30.0  # audio heard while Omi starts up, kept for the listener to catch up on
 PREROLL_CHUNKS = 16  # audio kept while Omi talks, so the first words of an interruption count
 BARGE_IN_THRESHOLD = 0.6  # stricter than end-of-turn detection
+# Talking while Omi speaks first lowers its voice, then decides what you meant:
+OVERLAP_TAKEOVER_CHUNKS = 38  # ~1.2 s of your speech is a real interruption, whatever it says
+OVERLAP_PAUSE_CHUNKS = 10  # ~0.3 s of quiet ends a short remark, which is then transcribed
+OVERLAP_MAX_S = 4.0  # still undecided after this: Omi carries on at full volume
 CONFIRM_REOPEN_DELAY_S = 1.2
 QUIET_RMS_THRESHOLD = 0.008
 QUIET_RESET_S = 2.5
+# Look to talk: steady speech for this many chunks while you face the screen opens a turn.
+LOOK_ONSET_CHUNKS = 6
+# ~1.3 s, so the words said before the decision still count: the camera only opens once
+# a voice is heard and takes about 0.3 s to its first reading.
+LOOK_PREROLL_CHUNKS = 40
+LOOK_KEEP_RATIO = 0.5  # face away for more of the request than this and it was not for Omi
 
 _GOODBYE_RE = re.compile(
     r"^(?:(?:ok(?:ay)?|alright|all right|thanks?|thank you)(?:\s+omi)?\s+)*"
@@ -96,6 +108,34 @@ def is_goodbye(text: str) -> bool:
     if not clean or len(clean.split()) > 7:
         return False
     return bool(_GOODBYE_RE.fullmatch(clean))
+
+
+# Short sounds of agreement said while someone else talks. Hyphens are dropped first, so
+# "mm-hmm" is "mmhmm" and "uh-huh" is "uhhuh".
+BACKCHANNEL_WORDS = frozenset({
+    "mm", "mmm", "hm", "hmm", "mhm", "mmhm", "mmhmm", "uhhuh", "uh", "um", "ah", "oh", "aha",
+    "yeah", "yes", "yep", "yup", "ya", "ok", "okay", "alright", "right", "sure", "cool", "nice",
+    "great", "wow", "true", "totally", "exactly", "gotcha", "got", "it", "i", "see", "interesting",
+})
+
+
+def is_backchannel(text: str) -> bool:
+    """True when something said over Omi only acknowledges it ("mm-hm", "yeah, right"),
+    or is no words at all (a cough). Omi then keeps talking."""
+    words = re.findall(r"[a-z]+", text.lower().replace("-", ""))
+    return len(words) <= 4 and all(w in BACKCHANNEL_WORDS for w in words)
+
+
+@dataclass
+class _Overlap:
+    """The user talking while Omi speaks, until it is clear whether they mean to interrupt."""
+
+    started: float
+    chunks: list[np.ndarray]
+    speech: int  # chunks of speech heard so far
+    quiet: int = 0  # chunks of quiet since the last speech
+    checked: int = 0  # `speech` when the last transcription began
+    check: asyncio.Task[str] | None = field(default=None, repr=False)
 
 
 def effective_call_mode(cfg: WakeConfig) -> str:
@@ -147,6 +187,17 @@ def should_continue_conversation(
 class Detector(Protocol):
     def feed(self, pcm: np.ndarray) -> str: ...
     def reset(self) -> None: ...
+
+
+class Attention(Protocol):
+    """Whether you are facing the screen (omi.look.LookTracker)."""
+    error: str | None
+    def start(self) -> None: ...
+    def stop(self) -> None: ...
+    def looking(self, now: float | None = None) -> bool: ...
+    def addressed(self, now: float | None = None) -> bool: ...
+    def wake(self) -> None: ...
+    def facing_ratio(self, since: float, until: float | None = None) -> float | None: ...
 
 
 class Endpoint(Protocol):
@@ -310,6 +361,65 @@ class WakeDetector:
         return hit
 
 
+class Backlog:
+    """A mic opened before the listener is ready. It keeps the newest EARLY_MAX_S of
+    audio so the listener can go through what was said during start-up, then carries on
+    with live audio from the same stream, so nothing falls between the two."""
+
+    def __init__(self, audio: AudioIn, max_s: float = EARLY_MAX_S) -> None:
+        self.audio = audio
+        self.max_samples = int(max_s * SAMPLE_RATE)
+        self.samples = 0
+        self._chunks: collections.deque[np.ndarray] = collections.deque()
+        self._more = asyncio.Event()
+        self._ended = False
+        self._task: asyncio.Task[None] | None = None
+
+    @property
+    def error(self) -> str | None:
+        return getattr(self.audio, "error", None)
+
+    @property
+    def seconds(self) -> float:
+        return self.samples / SAMPLE_RATE
+
+    async def start(self) -> None:
+        if self._task is None:  # the listener calls start() too; the mic is already open
+            await self.audio.start()
+            self._task = asyncio.create_task(self._pump())
+
+    async def _pump(self) -> None:
+        try:
+            while (chunk := await self.audio.read()) is not None:
+                self._chunks.append(chunk)
+                self.samples += len(chunk)
+                while self.samples > self.max_samples and len(self._chunks) > 1:
+                    self.samples -= len(self._chunks.popleft())
+                self._more.set()
+        finally:
+            self._ended = True
+            self._more.set()
+
+    async def read(self) -> np.ndarray | None:
+        while not self._chunks:
+            if self._ended:
+                return None
+            self._more.clear()
+            await self._more.wait()
+        chunk = self._chunks.popleft()
+        self.samples -= len(chunk)
+        return chunk
+
+    async def stop(self) -> np.ndarray:
+        if self._task is not None:
+            self._task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await self._task
+        self._chunks.clear()
+        self.samples = 0
+        return await self.audio.stop()
+
+
 class WakeListener:
     """Background continuous listener: spots the wake word, enters continuous phone-call
     conversation mode (keeping the mic open for follow-up turns after each reply), and
@@ -333,6 +443,9 @@ class WakeListener:
         post_speech_cooldown_s: float = POST_SPEECH_COOLDOWN_S,
         barge_in: bool = False,
         barge_vad_factory: Callable[[], Endpoint] | None = None,
+        attention_factory: Callable[[], Attention] | None = None,
+        look_vad_factory: Callable[[], Endpoint] | None = None,
+        voice_gate: Callable[[np.ndarray], bool | None] | None = None,
     ) -> None:
         self.session = session
         self.cfg = cfg
@@ -353,17 +466,89 @@ class WakeListener:
         self._barge_vad_factory = barge_vad_factory or (
             lambda: EndpointDetector(silence_ms=cfg.silence_ms, threshold=BARGE_IN_THRESHOLD))
         self._barge_vad: Endpoint | None = None
+        # Look to talk: the webcam decides whether speech is meant for Omi, no wake word.
+        self._attention_factory = attention_factory or self._default_attention
+        self._look_vad_factory = look_vad_factory or (
+            lambda: EndpointDetector(silence_ms=cfg.silence_ms, threshold=BARGE_IN_THRESHOLD))
+        self._look: Attention | None = None
+        self._look_vad: Endpoint | None = None
+        # "Only my voice": True/None lets a request through, False drops it (someone else).
+        self._voice_gate = voice_gate
+        self._look_failed: str | None = None  # why look to talk could not start
+        self._control = asyncio.Lock()  # start, stop and look toggles can arrive together
         self._vad: Endpoint | None = None
         self._audio: AudioIn | None = None
         self._task: asyncio.Task[None] | None = None
         self._pool: ThreadPoolExecutor | None = None
         self._running = False
         self.conversing = False
+        # The mic is open for a request but nobody has started talking yet (a call
+        # waiting for the follow-up): a restart here loses nothing.
+        self.waiting_for_speech = False
+        self._resume_call = False
+        self._early: Backlog | None = None
         self.error: str | None = None
 
     @property
     def active(self) -> bool:
         return self._running and self._task is not None and not self._task.done()
+
+    @property
+    def looking_active(self) -> bool:
+        return self._look is not None
+
+    @property
+    def look_paused_by(self) -> str:
+        """The call or dictation app holding the mic while look to talk rests, or ""."""
+        return str(getattr(self._look, "paused_by", "") or "") if self._look is not None else ""
+
+    @property
+    def look_error(self) -> str | None:
+        if self._look is None:
+            return self._look_failed
+        return self._look.error
+
+    def _default_attention(self) -> Attention:
+        from omi.look import LookTracker
+
+        return LookTracker(self.cfg.camera, lip_check=self.cfg.lip_check, lip_threshold=self.cfg.lip_threshold,
+                           yaw_center=self.cfg.yaw_center, yaw_range=self.cfg.yaw_range)
+
+    async def sync_look(self) -> None:
+        """Turn the webcam on or off to match `look_to_talk` while the listener runs."""
+        async with self._control:
+            await self._sync_look()
+
+    async def _sync_look(self) -> None:
+        loop = asyncio.get_running_loop()
+        want = bool(self.cfg.look_to_talk) and self._running and self._pool is not None
+        if not want:
+            self._look_failed = None
+        if want and self._look is None:
+            assert self._pool is not None
+            if self._look_vad is None:
+                self._look_vad = await loop.run_in_executor(self._pool, self._look_vad_factory)
+            if self.barge_in and self._barge_vad is None:
+                self._barge_vad = await loop.run_in_executor(self._pool, self._barge_vad_factory)
+            look = self._attention_factory()
+            try:
+                await loop.run_in_executor(None, look.start)
+            except Exception as exc:
+                self._look_failed = str(exc) or type(exc).__name__
+                raise
+            self._look_failed = None
+            self._look = look
+        elif not want and self._look is not None:
+            look, self._look = self._look, None
+            await loop.run_in_executor(None, look.stop)
+
+    async def reload_look(self) -> None:
+        """Reopen the webcam after the chosen camera changed."""
+        async with self._control:
+            if self._look is not None:
+                look, self._look = self._look, None
+                await asyncio.get_running_loop().run_in_executor(None, look.stop)
+            await self._sync_look()
 
     async def reload_detector(self) -> None:
         """Rebuild the KWS detector live after a sensitivity/threshold change."""
@@ -373,7 +558,12 @@ class WakeListener:
         self._detector = await loop.run_in_executor(self._pool, WakeDetector, self.cfg)
 
     async def start(self) -> None:
+        async with self._control:
+            await self._start()
+
+    async def _start(self) -> None:
         if self.active:
+            await self._sync_look()
             return
         self.error = None
         if self._pool is None:
@@ -387,10 +577,42 @@ class WakeListener:
             self._barge_vad = await loop.run_in_executor(self._pool, self._barge_vad_factory)
         self._running = True
         self._task = asyncio.create_task(self._run(), name="omi-wake-loop")
+        try:
+            await self._sync_look()
+        except Exception as exc:
+            # The camera side failing must never take the wake word down with it.
+            log.warning("look to talk could not start, the wake word still works: %s", exc)
 
     async def stop(self) -> None:
+        async with self._control:
+            await self._stop()
+
+    async def listen_early(self) -> None:
+        """Open the mic now, while the models still load. What is said meanwhile is kept
+        and the listener goes through it once it starts, so nothing is lost."""
+        if self._early is not None or self.active:
+            return
+        early = Backlog(self._audio_in_factory())
+        await early.start()
+        self._early = early
+
+    def resume_call(self) -> None:
+        """Carry on the call a previous daemon had open: listen for the follow-up as soon
+        as the mic opens, with no wake word."""
+        self._resume_call = True
+
+    async def _stop(self) -> None:
         self._running = False
         self.conversing = False
+        self.waiting_for_speech = False
+        if self._early is not None:
+            early, self._early = self._early, None
+            with contextlib.suppress(Exception):
+                await early.stop()
+        if self._look is not None:
+            look, self._look = self._look, None
+            with contextlib.suppress(Exception):
+                await asyncio.get_running_loop().run_in_executor(None, look.stop)
         if self._audio is not None:
             with contextlib.suppress(Exception):
                 await self._audio.stop()
@@ -438,12 +660,75 @@ class WakeListener:
         if was and self._broadcast is not None:
             await self._broadcast({"event": "wake", "conversing": False})
 
+    async def _voice_ok(self, heard: list[np.ndarray]) -> bool:
+        """False only when "only my voice" is on and this was clearly someone else."""
+        if self._voice_gate is None or not heard:
+            return True
+        pcm = np.concatenate(heard)
+        try:
+            verdict = await asyncio.get_running_loop().run_in_executor(self._pool, self._voice_gate, pcm)
+        except Exception:
+            log.warning("voice check failed; letting the request through", exc_info=True)
+            return True
+        return verdict is not False
+
+    def _turned_away(self, since: float, until: float) -> bool:
+        """True when the webcam saw you facing away for most of a look-opened request."""
+        if self._look is None:
+            return False
+        ratio = self._look.facing_ratio(since, until)
+        return ratio is not None and ratio < LOOK_KEEP_RATIO
+
+    async def _follow_overlap(self, o: _Overlap, chunk: np.ndarray, now: float) -> bool | None:
+        """One chunk heard while the user talks over Omi. True: they are interrupting.
+        False: only an acknowledgement or a noise, Omi carries on. None: not clear yet."""
+        if self.session.state is State.ACTING:
+            return False  # never interrupt a tool that is running
+        vad = self._barge_vad
+        assert vad is not None and self._pool is not None
+        loop = asyncio.get_running_loop()
+        o.chunks.append(chunk)
+        await loop.run_in_executor(self._pool, vad.feed, chunk)
+        if vad.ended:
+            await loop.run_in_executor(self._pool, vad.reset)
+        if vad.speaking:
+            o.speech += 1
+            o.quiet = 0
+        else:
+            o.quiet += 1
+        if o.speech >= OVERLAP_TAKEOVER_CHUNKS:
+            return True
+        if o.check is not None and o.check.done():
+            check, o.check = o.check, None
+            heard = ""
+            if not check.cancelled() and check.exception() is None:
+                heard = check.result()
+            if not is_backchannel(heard):
+                log.info("overlap: heard %r, Omi stops", heard)
+                return True
+            if o.speech == o.checked:
+                return False
+            # More was said after that clip: check the whole of it at the next pause.
+        if now - o.started >= OVERLAP_MAX_S:
+            return False
+        if o.check is None and o.quiet >= OVERLAP_PAUSE_CHUNKS and o.speech > o.checked:
+            o.checked = o.speech
+            o.check = asyncio.create_task(self.session.transcribe_clip(np.concatenate(o.chunks)))
+        return None
+
+    @staticmethod
+    def _drop_overlap(o: _Overlap) -> None:
+        if o.check is not None:
+            o.check.cancel()
+
     async def _run(self) -> None:
         assert self._detector is not None and self._vad is not None and self._pool is not None
         loop = asyncio.get_running_loop()
         while self._running:
-            audio = self._audio_in_factory()
+            audio, self._early = self._early or self._audio_in_factory(), None
             self._audio = audio
+            if isinstance(audio, Backlog) and audio.seconds >= 0.1:
+                log.info("catching up on %.1f s heard while starting", audio.seconds)
             try:
                 await audio.start()
                 self.error = None
@@ -468,11 +753,23 @@ class WakeListener:
             turn_task: asyncio.Task[Any] | None = None
             preroll: collections.deque[np.ndarray] = collections.deque(maxlen=PREROLL_CHUNKS)
             barge_run = 0
+            overlap: _Overlap | None = None  # the user talking while Omi speaks, not yet decided
+            look_preroll: collections.deque[np.ndarray] = collections.deque(maxlen=LOOK_PREROLL_CHUNKS)
+            look_run = 0
+            look_turn_since: float | None = None  # set while capturing a turn opened by looking
+            heard: list[np.ndarray] = []  # this request's audio, for the "only my voice" check
+
+            def feed(chunk: np.ndarray) -> None:
+                self.session.feed_audio(chunk)
+                heard.append(chunk)
 
             async def start_capture(timeout_s: float) -> None:
                 nonlocal capturing, speech_seen, capture_started, speech_started, active_timeout, reopen_at, confirm_reopen_at
+                nonlocal look_turn_since
                 reopen_at = None
                 confirm_reopen_at = None
+                look_turn_since = None
+                heard.clear()
                 await self.session.begin_utterance()
                 await loop.run_in_executor(self._pool, self._vad.reset)
                 capturing = True
@@ -481,8 +778,32 @@ class WakeListener:
                 speech_started = None
                 active_timeout = timeout_s
 
+            async def take_over(buffered: list[np.ndarray]) -> None:
+                """The user interrupts Omi: stop it and make what they said the next turn."""
+                nonlocal turn_task, was_busy, barge_run, speech_seen, speech_started
+                log.info("barge-in: the user talked over Omi")
+                turn_task = None  # its result no longer decides anything
+                was_busy = False
+                barge_run = 0
+                await start_capture(self.cfg.followup_timeout_s)
+                for past in buffered:
+                    feed(past)
+                    await loop.run_in_executor(self._pool, self._vad.feed, past)
+                speech_seen = bool(buffered)
+                if speech_seen:
+                    speech_started = monotonic()
+
+            if self._resume_call:
+                self._resume_call = False
+                if effective_call_mode(self.cfg) != "single":
+                    self.conversing = True
+                    reopen_at = monotonic()
+                    if self._broadcast is not None:
+                        await self._broadcast({"event": "wake", "phrase": "resume", "conversing": True})
+
             try:
                 while self._running:
+                    self.waiting_for_speech = capturing and not speech_seen
                     chunk = await audio.read()
                     if chunk is None:
                         break
@@ -517,6 +838,9 @@ class WakeListener:
 
                     # If user took over with PTT, drop continuous call mode cleanly.
                     if self._is_ptt_active():
+                        if overlap is not None:
+                            overlap = self._drop_overlap(overlap)
+                            await self.session.duck(False)
                         if capturing:
                             capturing = False
                         if self.conversing:
@@ -534,18 +858,29 @@ class WakeListener:
                             await loop.run_in_executor(self._pool, self._detector.reset)
                             cooldown_until = now + 0.3
                             continue
-                        self.session.feed_audio(chunk)
+                        feed(chunk)
                         await loop.run_in_executor(self._pool, self._vad.feed, chunk)
+                        if self._vad.speaking and look_turn_since is not None and self._look is not None:
+                            self._look.wake()  # keep watching for the turned-away check
                         if self._vad.speaking:
                             if not speech_seen:
                                 speech_started = now
                             speech_seen = True
+                            self.waiting_for_speech = False
                         elapsed = now - capture_started
                         speech_elapsed = (now - speech_started) if speech_started is not None else 0.0
                         if self._vad.ended or (speech_seen and speech_elapsed >= self.cfg.max_utterance_s):
                             capturing = False
                             await loop.run_in_executor(self._pool, self._detector.reset)
-                            if speech_seen:
+                            if speech_seen and look_turn_since is not None and self._turned_away(look_turn_since, now):
+                                log.info("look to talk: you turned away, so that was not for Omi")
+                                await self.session.cancel_utterance()
+                                cooldown_until = now + 0.3
+                            elif speech_seen and not await self._voice_ok(heard):
+                                log.info("only my voice: that was someone else, so it was ignored")
+                                await self.session.cancel_utterance()
+                                cooldown_until = now + 0.3
+                            elif speech_seen:
                                 turn_task = asyncio.create_task(self.session.end_utterance())
                                 cooldown_until = now + self._post_speech_cooldown_s
                             else:
@@ -558,6 +893,23 @@ class WakeListener:
                             await self._end_conversation(chime=self.conversing)
                             await loop.run_in_executor(self._pool, self._detector.reset)
                             cooldown_until = now + 0.3
+                        continue
+
+                    if overlap is not None:
+                        verdict = await self._follow_overlap(overlap, chunk, now)
+                        if verdict is None:
+                            continue
+                        buffered, overlap = overlap.chunks, self._drop_overlap(overlap)
+                        preroll.clear()
+                        if verdict:
+                            await take_over(buffered)
+                            await self.session.duck(False)  # in case a yes/no question kept playing
+                        else:
+                            log.info("overlap: only an acknowledgement, Omi carries on")
+                            barge_run = 0
+                            await self.session.duck(False)
+                            if self._barge_vad is not None:
+                                await loop.run_in_executor(self._pool, self._barge_vad.reset)
                         continue
 
                     # Hands-free voice confirmation during an active call: open mic once question is spoken.
@@ -585,15 +937,18 @@ class WakeListener:
                             continue
                         preroll.append(chunk)
                         interrupt = False
+                        voice = False  # sustained speech, as opposed to the wake word
                         if self.conversing and self._barge_vad is not None:
                             vad = self._barge_vad
                             await loop.run_in_executor(self._pool, vad.feed, chunk)
                             if vad.ended:
                                 await loop.run_in_executor(self._pool, vad.reset)
                             barge_run = barge_run + 1 if vad.speaking else 0
-                            interrupt = barge_run >= BARGE_IN_CHUNKS
+                            interrupt = voice = barge_run >= BARGE_IN_CHUNKS
                         elif not self.conversing:
-                            hit = await loop.run_in_executor(self._pool, self._detector.feed, chunk)
+                            hit = ""
+                            if self.cfg.enabled:
+                                hit = await loop.run_in_executor(self._pool, self._detector.feed, chunk)
                             if hit:
                                 log.info("wake word while busy: %s", hit)
                                 self.conversing = effective_call_mode(self.cfg) != "single"
@@ -601,20 +956,27 @@ class WakeListener:
                                     await self._broadcast({"event": "wake", "phrase": hit, "conversing": self.conversing})
                                 preroll.clear()  # the wake word itself is not part of the request
                                 interrupt = True
-                        if interrupt:
-                            log.info("barge-in: the user talked over Omi")
-                            turn_task = None  # its result no longer decides anything
-                            was_busy = False
-                            barge_run = 0
+                            elif self._look is not None and self._barge_vad is not None:
+                                # Look to talk: talking over Omi while facing the screen.
+                                vad = self._barge_vad
+                                await loop.run_in_executor(self._pool, vad.feed, chunk)
+                                if vad.ended:
+                                    await loop.run_in_executor(self._pool, vad.reset)
+                                barge_run = barge_run + 1 if vad.speaking else 0
+                                if vad.speaking:
+                                    self._look.wake()
+                                interrupt = voice = barge_run >= BARGE_IN_CHUNKS and self._look.addressed(now)
+                        if interrupt and voice and self.session.state is State.SPEAKING:
+                            # Lower Omi's voice and listen before deciding: "mm-hm" lets it
+                            # carry on, "wait" or a longer remark stops it.
+                            log.info("overlap: the user talks while Omi speaks, lowering its voice")
+                            overlap = _Overlap(now, list(preroll), speech=barge_run)
+                            preroll.clear()
+                            await self.session.duck(True)
+                        elif interrupt:
                             buffered = list(preroll)
                             preroll.clear()
-                            await start_capture(self.cfg.followup_timeout_s)
-                            for past in buffered:
-                                self.session.feed_audio(past)
-                                await loop.run_in_executor(self._pool, self._vad.feed, past)
-                            speech_seen = bool(buffered)
-                            if speech_seen:
-                                speech_started = monotonic()
+                            await take_over(buffered)
                         continue
 
                     # Active phone-call follow-up: reopen mic automatically once reply audio settles.
@@ -629,8 +991,44 @@ class WakeListener:
                         await loop.run_in_executor(self._pool, self._detector.reset)
                         audio_seen_since_reset = False
                         quiet_since = None
+                        look_preroll.clear()
+                        look_run = 0
+                        if self._look_vad is not None:
+                            await loop.run_in_executor(self._pool, self._look_vad.reset)
                         continue
                     if now < cooldown_until:
+                        continue
+
+                    # Look to talk: speech while you face the screen is for Omi.
+                    look = self._look
+                    if look is not None and self._look_vad is not None:
+                        look_preroll.append(chunk)
+                        vad = self._look_vad
+                        await loop.run_in_executor(self._pool, vad.feed, chunk)
+                        if vad.ended:
+                            await loop.run_in_executor(self._pool, vad.reset)
+                        look_run = look_run + 1 if vad.speaking else 0
+                        if vad.speaking:
+                            look.wake()  # the camera only runs while someone talks
+                        if look_run >= LOOK_ONSET_CHUNKS and look.addressed(now):
+                            log.info("look to talk: talking while facing the screen")
+                            buffered = list(look_preroll)
+                            look_preroll.clear()
+                            look_run = 0
+                            chunk_s = len(chunk) / SAMPLE_RATE
+                            since = now - len(buffered) * chunk_s
+                            await loop.run_in_executor(self._pool, vad.reset)
+                            if self._broadcast is not None:
+                                await self._broadcast({"event": "wake", "phrase": "look", "conversing": False})
+                            await start_capture(self.cfg.initial_timeout_s)
+                            look_turn_since = since
+                            for past in buffered:
+                                feed(past)
+                                await loop.run_in_executor(self._pool, self._vad.feed, past)
+                            speech_seen = True
+                            speech_started = since
+                            continue
+                    if not self.cfg.enabled:
                         continue
 
                     # Periodically reset the streaming KWS decoder after quiet stretches so
@@ -667,6 +1065,11 @@ class WakeListener:
                 await asyncio.sleep(1.0)
             finally:
                 self.conversing = False
+                self.waiting_for_speech = False
+                if overlap is not None:
+                    overlap = self._drop_overlap(overlap)
+                    with contextlib.suppress(Exception):
+                        await self.session.duck(False)
                 with contextlib.suppress(Exception):
                     await audio.stop()
                 if self._audio is audio:

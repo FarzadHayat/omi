@@ -135,3 +135,33 @@ async def test_delegate_when_the_worker_is_off():
     assert not w.active
     res = await delegate_tool(w).fn(task="anything")
     assert not res.ok and "off" in res.text
+
+
+async def test_omi_can_say_how_each_background_job_is_going(monkeypatch):
+    from omi import worker as worker_mod
+    from omi.worker import worker_jobs_tool
+
+    fake = FakeWorker()
+    w = SwitchableWorker(fake)
+    await w.start()
+    tool = worker_jobs_tool(w)
+    assert (await tool.fn()).text == "No background jobs since Omi started."
+    a = await w.submit("Research standing desks under 500 dollars")
+    b = await w.submit("Tidy the downloads folder")
+    c = await w.submit("Rename the photos from the trip")
+    fake.push(WorkerProgress(b, "Checking files"))
+    fake.push(WorkerDone(a, True, "Found three good desks."))
+    fake.push(WorkerDone(c, False, "Stopped."))
+    await asyncio.sleep(0.05)
+    states = {j["task"]: (j["state"], j["said"]) for j in w.report()}
+    assert states["Research standing desks under 500 dollars"] == ("done", "done: Found three good desks.")
+    assert states["Tidy the downloads folder"] == ("running", "still running, checking files")
+    assert states["Rename the photos from the trip"][0] == "stopped"
+    # Nothing new for a long time: say it may be stuck rather than "running".
+    real = time.monotonic
+    monkeypatch.setattr(worker_mod.time, "monotonic", lambda: real() + worker_mod.JOB_STUCK_S + 60)
+    stuck = {j["task"]: j for j in w.report()}["Tidy the downloads folder"]
+    assert stuck["state"] == "stuck" and "nothing new for 11 minutes" in stuck["said"]
+    text = (await tool.fn()).text
+    assert "Found three good desks" in text and "may be stuck" in text
+    await w.close()

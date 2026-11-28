@@ -136,8 +136,19 @@ def test_command_with_mcp_uses_approve_tool():
     cmd = session.command()
     assert cmd[cmd.index("--permission-prompt-tool") + 1] == "mcp__omi__approve"
     server = json.loads(cmd[cmd.index("--mcp-config") + 1])["mcpServers"]["omi"]
-    assert server["args"][-2:] == ["-m", "omi.tools.mcp_server"]
+    assert server["args"][-4:] == ["-m", "omi.tools.mcp_server", "--role", "talker"]
     assert "--strict-mcp-config" in cmd and "--dangerously-skip-permissions" not in cmd
+
+
+def test_worker_tells_the_permission_server_it_is_the_worker():
+    from omi.config import Config
+    from omi.worker import ClaudeWorker
+
+    cmd = ClaudeWorker(Config(), use_mcp=True).session.command()
+    server = json.loads(cmd[cmd.index("--mcp-config") + 1])["mcpServers"]["omi"]
+    assert server["args"][-2:] == ["--role", "worker"]
+    # Never Claude Code's own bypass: omi's checks (secret blocks) must still see every call.
+    assert "--dangerously-skip-permissions" not in cmd and "bypassPermissions" not in cmd
 
 
 async def test_tool_events_strip_mcp_prefix(fake_claude):

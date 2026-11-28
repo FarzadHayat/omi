@@ -435,6 +435,23 @@ class Session:
         self._utt = None
         await self.set_listening(False)
 
+    async def duck(self, on: bool) -> None:
+        """Lower the reply's voice while the user talks over it, or bring it back. Outputs
+        without a volume of their own (a remote device, tests) keep playing as they are."""
+        turn = self._turn
+        out = turn.speaker.out if turn is not None and turn.speaker is not None else self.out
+        duck = getattr(out, "duck", None)
+        if duck is None:
+            return
+        try:
+            await duck(on)
+        except Exception:
+            log.debug("could not change the reply volume", exc_info=True)
+
+    async def transcribe_clip(self, pcm: np.ndarray) -> str:
+        """Text of a short clip heard while Omi talks, to tell "mm-hm" from "wait"."""
+        return await self._transcribe(pcm)
+
     async def end_utterance(
         self, *, out: AudioOut | None = None, quiet: bool = False, sink: EmitFn | None = None
     ) -> TurnResult:
@@ -841,6 +858,23 @@ class Session:
             self._pending_done.clear()
             self._narrate(text)
 
+    async def announce(self, text: str, shown: str | None = None) -> None:
+        """Say a fixed line outside any turn and show it (or `shown`) on screen; returns
+        once it has been spoken. Used by guided setups."""
+        await self._emit({"event": "transcript", "role": "assistant", "text": shown or text})
+        self._narrate(text)
+        await self.finish_speaking()
+
+    async def finish_speaking(self) -> None:
+        """Wait for a line Omi is saying on its own (a question, an announcement)."""
+        task = self._narration
+        if task is not None and not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                if not task.cancelled():
+                    raise  # the caller was cancelled (Stop): pass it on
+
     def _narrate(self, text: str) -> None:
         self._narration = asyncio.create_task(self._narrate_run(text))
 
@@ -876,6 +910,25 @@ class Session:
                 and monotonic() - self._last_activity >= self.idle_timeout
             ):
                 self.end_session()
+
+    def snapshot(self) -> dict[str, Any]:
+        """This conversation, for the next daemon to carry on after a restart."""
+        return {
+            "session_id": self.session_id,
+            "history": list(self.history),
+            "transcript": list(self.transcript),
+            "pending_done": list(self._pending_done),
+            "idle_s": max(0.0, monotonic() - self._last_activity),
+        }
+
+    def restore(self, snap: dict[str, Any], idle_s: float = 0.0) -> None:
+        """Carry on a conversation a previous daemon saved with snapshot(). idle_s is how
+        long it has been quiet, so the idle session end still comes on time."""
+        self.session_id = str(snap.get("session_id") or self.session_id)
+        self.history = list(snap.get("history") or [])[-HISTORY_LIMIT:]
+        self.transcript = list(snap.get("transcript") or [])
+        self._pending_done = [str(t) for t in snap.get("pending_done") or []]
+        self._last_activity = monotonic() - max(0.0, idle_s)
 
     def end_session(self) -> asyncio.Future[Any] | None:
         """Close this conversation and start a fresh one with no history. Returns the

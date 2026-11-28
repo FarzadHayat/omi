@@ -723,3 +723,98 @@ async def test_cli_yes_answers_the_waiting_question_by_id(daemon, capsys):
     assert code == 0 and "yes to: Delete the build folder?" in out
     assert await c.line() == {"ok": True, "answer": True}
     await c.close()
+
+
+# --- restarts keep the conversation ---
+
+
+async def test_stop_waits_for_the_turn_then_hands_the_conversation_over(sock_dir):
+    brain = FakeBrain([(0.4, TextDelta("Done waiting.")), (0.0, TurnDone())])
+    d = make_daemon(sock_dir, brain)
+    task = asyncio.create_task(d.run())
+    while not d.socket_path.exists():
+        await asyncio.sleep(0.01)
+    c = await Client.open(d)
+    await c.send({"cmd": "say", "text": "hold on a sec", "quiet": True})
+    while not brain.turns:
+        await asyncio.sleep(0.01)
+    os.kill(os.getpid(), signal.SIGTERM)  # an agent restarts omi mid-reply
+    await asyncio.sleep(0.15)
+    assert not task.done() and not d.quiet()
+    final = (await c.until_done())[-1]
+    assert final["reply"] == "Done waiting." and not final["cancelled"]
+    await c.close()
+    await asyncio.wait_for(task, 2)
+    sid = d.session.session_id
+    assert (sock_dir / "handoff.json").exists()
+
+    nxt = make_daemon(sock_dir)
+    await nxt.start()
+    try:
+        assert not (sock_dir / "handoff.json").exists()
+        assert nxt.session.session_id == sid
+        await call(nxt, {"cmd": "say", "text": "what did I say", "quiet": True})
+        history = nxt.session.brain.turns[-1][1].history
+        assert history[:2] == [{"role": "user", "content": "hold on a sec"},
+                               {"role": "assistant", "content": "Done waiting."}]
+    finally:
+        await nxt.close()
+
+
+async def test_second_stop_signal_cuts_in_at_once(sock_dir):
+    brain = FakeBrain([(5.0, TextDelta("never")), (0.0, TurnDone())])
+    d = make_daemon(sock_dir, brain)
+    task = asyncio.create_task(d.run())
+    while not d.socket_path.exists():
+        await asyncio.sleep(0.01)
+    c = await Client.open(d)
+    await c.send({"cmd": "say", "text": "long one", "quiet": True})
+    while not brain.turns:
+        await asyncio.sleep(0.01)
+    os.kill(os.getpid(), signal.SIGTERM)
+    await asyncio.sleep(0.05)
+    os.kill(os.getpid(), signal.SIGTERM)
+    await asyncio.wait_for(task, 2)
+    await c.close()
+
+
+async def test_stale_handoff_is_digested_not_resumed(sock_dir, monkeypatch):
+    from omi import daemon as daemon_mod
+
+    monkeypatch.setattr(daemon_mod, "IDLE_JOB_GRACE_S", 0.05)
+    monkeypatch.setattr(daemon_mod, "IDLE_POLL_S", 0.01)
+    (sock_dir / "handoff.json").write_text(json.dumps({
+        "session_id": "old", "history": [{"role": "user", "content": "hi"}],
+        "transcript": [{"role": "user", "content": "hi"}], "idle_s": 0, "saved_at": time.time() - 3600,
+    }))
+    d = make_daemon(sock_dir)
+    ended = []
+
+    async def on_end(sid, text):
+        ended.append((sid, text))
+
+    d.session.on_session_end = on_end
+    await d.start()
+    try:
+        assert d.session.session_id != "old" and d.session.history == []
+        for _ in range(200):
+            if ended:
+                break
+            await asyncio.sleep(0.01)
+        assert ended == [("old", "user: hi")]
+    finally:
+        await d.close()
+
+
+async def test_an_open_call_mic_that_heard_nothing_is_quiet(daemon):
+    class Wake:
+        waiting_for_speech = True
+
+    assert daemon.quiet()
+    daemon.wake = Wake()
+    await daemon.session.begin_utterance()  # the call reopened the mic for a follow-up
+    assert daemon.quiet()
+    Wake.waiting_for_speech = False  # the user started talking
+    assert not daemon.quiet()
+    await daemon.session.cancel_utterance()
+    daemon.wake = None

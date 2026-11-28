@@ -24,7 +24,7 @@ Always pick the fastest reliable tool for the job:
 2. Claude in Chrome tools for anything inside the web browser (reading tabs, navigating, clicking, filling forms, searching).
 3. `ui_inspect` + `ui_action` (AT-SPI) for clicking/typing inside desktop apps without screenshots.
 4. `capture_screen` (returns the screenshot inline) + `mouse_click` / `mouse_scroll` / `type_text` / `press_keys` for visual or complex GUI tasks.
-5. Call `point_at` or `highlight_window` whenever the user asks where something is or asks about something on screen, so your on-screen mascot flies over and points right at it.
+5. Call `point_at` or `highlight_window` whenever the user asks where something is or asks about something on screen, so your on-screen mascot shows a large arrow pointing right at it.
 Work carefully: check what you find before you report it, and verify the result of every change.
 If the user says Omi is failing at a task, or it is clearly outside your tools or keeps failing, hand it off to T3 Code right away with `t3_send` (for a relevant open thread) or `t3_start` (for the relevant project, or omit `project` for scratch) instead of retrying or giving up, and tell the user you handed it to T3 Code.
 When you count, list or search a project's files, skip dependency and build folders such as
@@ -78,7 +78,7 @@ class ClaudeWorker:
         self.session = ClaudeSession(
             cfg.brain.claude.worker_model, WORKER_PROMPT.format(name=cfg.name),
             tools="default", setting_sources="user", use_mcp=use_mcp, cwd=str(HOME),
-            claude_cmd=claude_cmd, chrome=cfg.brain.claude.chrome)
+            claude_cmd=claude_cmd, chrome=cfg.brain.claude.chrome, role="worker")
         self.progress_every_s = PROGRESS_EVERY_S
         self._jobs: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
         self._events: asyncio.Queue[WorkerEvent] = asyncio.Queue()
@@ -170,6 +170,8 @@ class SwitchableWorker:
         self.current = worker
         self._events: asyncio.Queue[WorkerEvent] = asyncio.Queue()
         self._open: set[str] = set()
+        # The last jobs and how each is going, for "how are my jobs going?".
+        self.jobs: dict[str, dict] = {}
         self._pump: asyncio.Task[None] | None = None
 
     @property
@@ -194,6 +196,10 @@ class SwitchableWorker:
             raise RuntimeError("the background worker is off")
         job_id = await self.current.submit(task)
         self._open.add(job_id)
+        self.jobs[job_id] = {"task": " ".join(task.split())[:90], "started": time.monotonic(),
+                             "updated": time.monotonic(), "step": "", "state": "working", "summary": ""}
+        for old in list(self.jobs)[:-JOBS_KEPT]:
+            del self.jobs[old]
         return job_id
 
     async def events(self) -> AsyncIterator[WorkerEvent]:
@@ -212,7 +218,9 @@ class SwitchableWorker:
             with contextlib.suppress(Exception):
                 await old.close()
         for job_id in sorted(self._open):
-            self._events.put_nowait(WorkerDone(job_id, False, "Stopped, because the worker was changed."))
+            done = WorkerDone(job_id, False, "Stopped, because the worker was changed.")
+            self._note(done)
+            self._events.put_nowait(done)
         self._open.clear()
         if worker is not None:
             self._pump_from(worker)
@@ -227,9 +235,42 @@ class SwitchableWorker:
             async for ev in worker.events():
                 if isinstance(ev, WorkerDone):
                     self._open.discard(ev.job_id)
+                self._note(ev)
                 self._events.put_nowait(ev)
 
         self._pump = asyncio.create_task(pump())
+
+    def _note(self, ev: WorkerEvent) -> None:
+        job = self.jobs.get(ev.job_id)
+        if job is None:
+            return
+        job["updated"] = time.monotonic()
+        if isinstance(ev, WorkerProgress):
+            job["step"] = ev.text
+        elif isinstance(ev, WorkerDone):
+            stopped = ev.summary.startswith(("Stopped", "Cancelled"))
+            job["state"] = "done" if ev.ok else ("stopped" if stopped else "failed")
+            job["summary"] = ev.summary
+
+    def report(self) -> list[dict]:
+        """Each recent job in plain words: done, running, may be stuck, stopped or failed."""
+        now = time.monotonic()
+        out = []
+        for job_id, job in reversed(self.jobs.items()):
+            quiet = now - job["updated"]
+            state = job["state"]
+            if state == "working":
+                state = "stuck" if quiet >= JOB_STUCK_S else "running"
+            minutes = max(1, round(quiet / 60))
+            said = {
+                "running": f"still running{', ' + job['step'].lower() if job['step'] else ''}",
+                "stuck": f"may be stuck: nothing new for {minutes} minute{'s' if minutes != 1 else ''}",
+                "done": f"done: {job['summary']}",
+                "stopped": "stopped before it finished",
+                "failed": f"failed: {job['summary']}",
+            }[state]
+            out.append({"id": job_id, "task": job["task"], "state": state, "said": said})
+        return out
 
     async def _stop_pump(self) -> None:
         if self._pump is not None:
@@ -237,6 +278,28 @@ class SwitchableWorker:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._pump
             self._pump = None
+
+
+JOBS_KEPT = 10
+JOB_STUCK_S = 10 * 60  # a job with no new step for this long may be stuck
+
+
+def worker_jobs_tool(worker: SwitchableWorker | None) -> Tool:
+    async def worker_jobs() -> ToolResult:
+        report = worker.report() if worker is not None else []
+        if not report:
+            return ToolResult(True, "No background jobs since Omi started.", {"jobs": []})
+        spoken = " ".join(f"{j['task']}: {j['said'].rstrip('.')}." for j in report[:5])
+        return ToolResult(True, spoken, {"jobs": report})
+
+    return Tool(
+        name="worker_jobs",
+        description="Check on jobs handed to Omi's own background worker with `delegate`: for each, whether it "
+                    "is done (and what it found), still running, may be stuck, stopped, or failed.",
+        parameters={"type": "object", "properties": {}},
+        safety="read",
+        fn=worker_jobs,
+    )
 
 
 def delegate_tool(worker: Worker) -> Tool:

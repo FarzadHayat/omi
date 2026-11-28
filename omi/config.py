@@ -151,6 +151,10 @@ class BrainConfig:
     # Backups, in order, for when the background worker fails before acting:
     # "provider" or "provider:model". Uninstalled ones are skipped.
     worker_fallbacks: list[str] = field(default_factory=lambda: ["codex", "opencode"])
+    # What the background worker may do without you. "auto": safe steps run, risky ones
+    # (deleting, pushing, uploading) wait for your yes. "unrestricted": it never asks.
+    # Reading keys, tokens and .env files stays blocked in both. The talker always asks.
+    worker_mode: str = "auto"
     local: LocalLlmConfig = field(default_factory=LocalLlmConfig)
     claude: ClaudeConfig = field(default_factory=ClaudeConfig)
     opencode: CliProviderConfig = field(default_factory=CliProviderConfig)
@@ -198,6 +202,14 @@ class WakeConfig:
     followup_timeout_s: float = 0.0  # drop back to standby after this much silence in call mode (0 = never)
     max_utterance_s: float = 60.0
     chime: bool = True
+    look_to_talk: bool = False  # webcam: speech while you face the screen is for Omi, no wake word
+    camera: str = ""  # webcam for look to talk: index or /dev/videoN; empty = first camera
+    lip_check: bool = True  # look to talk also needs moving lips, so a video on screen does not count
+    only_my_voice: bool = False  # ignore voices nobody saved with `omi look-tune` / `omi voice add`
+    # Set by `omi look-tune` for your face, camera and room:
+    lip_threshold: float = 0.03  # how much lip movement counts as talking
+    yaw_center: float = 0.0  # head turn that means "facing the screen" (0 = camera on that screen)
+    yaw_range: float = 0.35  # how far from it you can turn and still count as facing it
 
 
 @dataclass

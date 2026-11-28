@@ -1,7 +1,8 @@
 """`omi install` and `omi uninstall`: the Omarchy desktop integration.
 
-install puts three things in place from the repo's omarchy/ folder:
+install puts four things in place, three from the repo's omarchy/ folder:
 
+  - the `omi` command, linked into ~/.local/bin so it runs from any terminal
   - the bar widget, copied to ~/.config/omarchy/plugins/omi/
   - the keys, as one marked block at the end of ~/.config/hypr/bindings.lua
     (the rest of the file is never rewritten)
@@ -10,7 +11,7 @@ install puts three things in place from the repo's omarchy/ folder:
 and then, unless told not to, starts the unit, turns the widget on and reloads
 Hyprland. Every file it is about to change is first copied to
 ~/.local/state/omi/backups/<time>/. Running it again changes nothing that is
-already right. uninstall removes exactly those three things (and turns them off);
+already right. uninstall removes exactly those four things (and turns them off);
 the backups stay.
 """
 
@@ -60,6 +61,10 @@ class Paths:
     @property
     def bindings(self) -> Path:
         return self.home / ".config/hypr/bindings.lua"
+
+    @property
+    def command(self) -> Path:
+        return self.home / ".local/bin/omi"
 
     @property
     def plugin(self) -> Path:
@@ -240,6 +245,25 @@ def is_our_plugin(path: Path) -> bool:
         return False
 
 
+def is_our_command(path: Path) -> bool:
+    """A link to some environment's omi entry point (any checkout of omi)."""
+    return path.is_symlink() and os.readlink(path).endswith("/bin/omi")
+
+
+def install_command(paths: Paths, binary: Path, report: Report) -> bool:
+    link = paths.command
+    if link.is_symlink() and os.readlink(link) == str(binary):
+        return False
+    if link.exists() or link.is_symlink():
+        if not is_our_command(link):
+            report.problems.append(f"{link} is not omi's; left alone, so `omi` may not run from a terminal")
+            return False
+        link.unlink()
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(binary)
+    return True
+
+
 def install_unit(paths: Paths, text: str, backup: Backup) -> bool:
     path = paths.unit
     if path.exists() and path.read_text() == text:
@@ -280,6 +304,8 @@ def plugin_enabled(paths: Paths, plugin_id: str = PLUGIN_ID) -> bool:
 def install(home: Path, binary: Path, *, activate: bool = True, run: Runner = run_command) -> Report:
     paths, report, backup = Paths(home), Report(), Backup(Paths(home))
     block, unit = bindings_block(binary), unit_text(binary)  # both checked before anything is written
+    if install_command(paths, binary, report):
+        report.changed.append(f"`omi` command linked at {paths.command}")
     had_plugin = paths.plugin.exists()
     plugin_changed = install_plugin(paths, backup)
     if plugin_changed:
@@ -339,6 +365,9 @@ def uninstall(home: Path, *, activate: bool = True, run: Runner = run_command) -
                 _step(report, run, ["omarchy-shell", "shell", "rescanPlugins"])
         else:
             report.problems.append(f"{paths.plugin} is not the omi widget; left alone")
+    if is_our_command(paths.command):
+        paths.command.unlink()
+        report.changed.append(f"removed {paths.command}")
     if remove_bindings(paths, backup):
         report.changed.append(f"keys removed from {paths.bindings}")
         if activate:

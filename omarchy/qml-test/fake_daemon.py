@@ -51,7 +51,8 @@ async def main(sock_path: str, log_path: str) -> None:
                             {"name": "opencode", "installed": True, "model": "(cli default)"},
                         ],
                         "voices": ["af_heart", "af_bella", "am_adam", "bf_emma", "bm_george"],
-                        "wake": {"enabled": True, "call_mode": "auto", "conversational": True, "sensitivity": "medium", "phrases": ["omi", "hey omi"]},
+                        "wake": {"enabled": True, "call_mode": "auto", "conversational": True, "sensitivity": "medium", "phrases": ["omi", "hey omi"], "look_to_talk": True, "camera": "/dev/video2"},
+                        "cameras": [{"id": "/dev/video0", "name": "Built-in"}, {"id": "/dev/video2", "name": "Desk Cam"}],
                         "errors": {},
                     })
                 elif cmd == "subscribe":

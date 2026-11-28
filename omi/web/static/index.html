@@ -25,14 +25,14 @@
       </svg>
       <h1 id="name">Omi</h1>
     </div>
-    <p class="state"><span class="shape" aria-hidden="true"></span><span id="state-text">Connecting</span></p>
+    <p class="state" role="status" aria-live="polite" aria-atomic="true"><span class="shape" aria-hidden="true"></span><span id="state-text">Connecting</span></p>
   </header>
 
   <section class="log" id="log" aria-label="Conversation" tabindex="0">
     <ol id="transcript" aria-live="polite" aria-relevant="additions"></ol>
   </section>
 
-  <section class="confirm" id="confirm" aria-labelledby="confirm-q" hidden>
+  <section class="confirm" id="confirm" role="alertdialog" aria-labelledby="confirm-q" aria-describedby="confirm-detail" hidden>
     <p id="confirm-q" class="question"></p>
     <p id="confirm-detail" class="detail" hidden></p>
     <div class="answers">

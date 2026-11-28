@@ -11,6 +11,7 @@ dependencies = [
     "kokoro-onnx>=0.4",
     "httpx>=0.27",
     "mcp>=1.2",
+    "opencv-python-headless>=5.1.0.95",
 ]
 
 [project.scripts]

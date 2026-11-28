@@ -22,6 +22,14 @@ Item {
   property string liveSpeech: ""     // spoken reply updated clause by clause
   property string lastProgress: ""   // current background action label
   property var mascot: null          // { action, x, y, w, h, label, duration } while pointing/moving
+  // Look to talk tuning, shown large in the middle of the screen while it runs
+  property bool tuning: false
+  property string tuneTitle: ""
+  property string tuneText: ""
+  property string tuneNote: ""       // a warning, e.g. the camera lost your face
+  property real tuneSeconds: 0       // seconds left in the current step; 0 = no timer
+  property real tuneTotal: 0         // the current step's full length
+  property int tuneSerial: 0         // bumps on every update, to restart the step timer
   property real cursorX: 0
   property real cursorY: 0
   property bool hasCursor: false
@@ -30,6 +38,10 @@ Item {
   property bool wakeConversational: true
   property string wakeSensitivity: "medium"
   property bool soundsEnabled: true
+  property bool lookToTalk: false  // webcam: talk while facing the screen, no wake word
+  property bool onlyMyVoice: false  // ignore voices nobody saved
+  property string lookCamera: ""   // chosen webcam id; "" = the first one
+  property var cameras: []         // [{ id, name }]
   property string talker: ""
   property string sttEngine: "parakeet"
   property string ttsEngine: "kokoro"
@@ -82,6 +94,22 @@ Item {
     } else if (ev === "progress") {
       lines = Model.appendLine(lines, "progress", msg.text)
       lastProgress = Model.clip(msg.text, 140)
+    } else if (ev === "tune") {
+      if (msg.active === true) {
+        tuneTitle = Model.clip(msg.title, 80)
+        tuneText = Model.clip(msg.text, 600)
+        tuneNote = Model.clip(msg.note, 140)
+        var secs = Number(msg.seconds)
+        tuneSeconds = isFinite(secs) && secs > 0 ? secs : 0
+        var total = Number(msg.total)
+        tuneTotal = isFinite(total) && total > 0 ? total : tuneSeconds
+        tuneSerial++
+        tuning = true
+      } else {
+        tuning = false
+        tuneNote = ""
+        tuneSeconds = 0
+      }
     } else if (ev === "mascot") {
       var m = Model.mascotOf(msg)
       mascot = m
@@ -118,7 +146,11 @@ Item {
         if (typeof msg.wake.call_mode === "string") wakeCallMode = msg.wake.call_mode
         if (typeof msg.wake.conversational === "boolean") wakeConversational = msg.wake.conversational
         if (typeof msg.wake.sensitivity === "string") wakeSensitivity = msg.wake.sensitivity
+        if (typeof msg.wake.look_to_talk === "boolean") lookToTalk = msg.wake.look_to_talk
+        if (typeof msg.wake.only_my_voice === "boolean") onlyMyVoice = msg.wake.only_my_voice
+        if (typeof msg.wake.camera === "string") lookCamera = msg.wake.camera
       }
+      if (Array.isArray(msg.cameras)) cameras = msg.cameras
       if (msg.audio && typeof msg.audio.sounds === "boolean") soundsEnabled = msg.audio.sounds
     } else if (ev === "confirm_request") {
       confirm = Model.confirmOf(msg)
@@ -142,7 +174,11 @@ Item {
         if (typeof msg.wake.call_mode === "string") wakeCallMode = msg.wake.call_mode
         if (typeof msg.wake.conversational === "boolean") wakeConversational = msg.wake.conversational
         if (typeof msg.wake.sensitivity === "string") wakeSensitivity = msg.wake.sensitivity
+        if (typeof msg.wake.look_to_talk === "boolean") lookToTalk = msg.wake.look_to_talk
+        if (typeof msg.wake.only_my_voice === "boolean") onlyMyVoice = msg.wake.only_my_voice
+        if (typeof msg.wake.camera === "string") lookCamera = msg.wake.camera
       }
+      if (Array.isArray(msg.cameras)) cameras = msg.cameras
       if (msg.audio && typeof msg.audio.sounds === "boolean") soundsEnabled = msg.audio.sounds
       var errText = ""
       if (msg.errors && typeof msg.errors === "object") {
@@ -197,6 +233,24 @@ Item {
 
   function toggleSounds() {
     return setSetting("audio.sounds", soundsEnabled ? "off" : "on")
+  }
+
+  function toggleMyVoice() {
+    return setSetting("wake.only_my_voice", onlyMyVoice ? "off" : "on")
+  }
+
+  // Omi talks you through tuning look to talk: three short steps, out loud.
+  function openLookTune() {
+    return send(Model.request("look_tune"))
+  }
+
+  // Stop the tuning part way; numbers are only saved once all three steps are done.
+  function cancelLookTune() {
+    stop()
+  }
+
+  function toggleLook() {
+    return setSetting("wake.look_to_talk", lookToTalk ? "off" : "on")
   }
 
   function cycleSensitivity() {
@@ -315,6 +369,7 @@ Item {
           root.phase = "offline"
           root.confirm = null
           root.mascot = null
+          root.tuning = false
         }
       }
     }

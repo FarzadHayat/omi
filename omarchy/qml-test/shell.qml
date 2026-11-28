@@ -94,8 +94,13 @@ ShellRoot {
           && h.lines[1].text === "<b>not bold</b>", h.lines)
         shell.check("confirm", h.confirm.id === "q-1" && h.confirm.question === "Delete the file notes.txt?", h.confirm)
         shell.check("mascot point", h.mascot !== null && h.mascot.x === 420 && h.mascot.label === "Save button", h.mascot)
+        var pm = shell.find(widget.companion, "companionMascot")
+        var arrow = shell.find(widget.companion, "omiPointerArrow")
+        shell.check("omi stays bottom right while pointing", pm !== null && pm.x > 1700 && pm.y > 900, pm ? [pm.x, pm.y] : null)
+        shell.check("pointer arrow shown", arrow !== null && arrow.visible === true && arrow.drawn === true, arrow ? [arrow.visible, arrow.drawn] : null)
         shell.check("cursor tracked", h.hasCursor === true && h.cursorX === 640 && h.cursorY === 420, [h.hasCursor, h.cursorX, h.cursorY])
         shell.check("wake status", h.wakeEnabled === true, h.wakeEnabled)
+        shell.check("look to talk status", h.lookToTalk === true && h.lookCamera === "/dev/video2" && h.cameras.length === 2, [h.lookToTalk, h.lookCamera, h.cameras.length])
         shell.check("settings hydrated", h.talker === "claude" && h.sttEngine === "nemotron" && h.ttsEngine === "kokoro" && h.voice === "af_heart" && h.ttsSpeed === 1.15 && h.wakeCallMode === "auto" && h.wakeSensitivity === "medium" && widget.installedProviders.length === 2, [h.talker, h.sttEngine, h.ttsEngine, h.voice, h.ttsSpeed, h.wakeCallMode])
         shell.check("companion shown", widget.companion.shown === true && widget.companion.interactive === true, widget.companion.shown)
         shell.check("accessible label", widget.accessibleLabel === "Omi: Waiting for your answer", widget.accessibleLabel)
@@ -110,7 +115,22 @@ ShellRoot {
         shell.check("answered", h.confirm === null)
         shell.step = 2
       } else if (shell.step === 2 && h.phase === "idle") {
-        shell.check("rows without question", JSON.stringify(widget.rows) === JSON.stringify(["input"]) && !widget.busy, widget.rows)
+        shell.check("rows without question", JSON.stringify(widget.rows) === JSON.stringify(["input", "wake", "settings"]) && !widget.busy, widget.rows)
+        widget.setRowCursor("input")
+        widget.moveCursor(2)
+        shell.check("cursor reaches settings", widget.currentRow === "settings", widget.currentRow)
+        h.receive(JSON.stringify({ event: "tune", active: true, title: "Step 2 of 3 · Talk to Omi",
+          text: "Read this out loud:\n\"Hey Omi, check my day.\"", note: "", seconds: 10, total: 10 }))
+        var card = shell.find(widget.companion, "omiBubble")
+        var cardText = shell.find(widget.companion, "omiBubbleText")
+        var mid = card ? card.x + card.width / 2 : -1
+        shell.check("tuning card large and centred", card !== null && card.visible && card.width >= 600
+          && Math.abs(mid - 960) < 2 && cardText.text.indexOf("check my day") >= 0, card ? [card.x, card.width, card.visible] : null)
+        var cancel = shell.find(widget.companion, "tuneCancelButton")
+        shell.check("tuning can be cancelled", cancel !== null && cancel.visible && widget.companion.interactive === true
+          && typeof h.cancelLookTune === "function", cancel ? cancel.visible : null)
+        h.receive(JSON.stringify({ event: "tune", active: false }))
+        shell.check("tuning card stays up to finish reading", widget.companion.shown === true && card.visible && card.width >= 600, [widget.companion.shown, card.visible])
         shell.check("say", h.say("  open the browser  "))
         h.stop()
         shell.step = 3

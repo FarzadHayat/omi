@@ -96,8 +96,8 @@ def resolve_provider(name: str, *, role: str = "talker") -> str:
     return low
 
 
-def _mcp_command() -> list[str]:
-    return [sys.executable, "-m", "omi.tools.mcp_server"]
+def _mcp_command(role: str = "talker") -> list[str]:
+    return [sys.executable, "-m", "omi.tools.mcp_server", "--role", role]
 
 
 @dataclass
@@ -118,10 +118,11 @@ def build_cli_invocation(
     effort: str = "",
     use_mcp: bool = True,
     binary: str | None = None,
+    role: str = "talker",
 ) -> tuple[list[str], dict[str, str]]:
     """Build exact (argv, extra_env) for one headless JSON-streaming CLI turn."""
     exe = binary or provider
-    mcp_cmd = _mcp_command()
+    mcp_cmd = _mcp_command(role)
     env: dict[str, str] = {}
 
     if provider == "opencode":
@@ -131,10 +132,14 @@ def build_cli_invocation(
         if session_id:
             argv += ["--session", session_id]
         argv.append(prompt)
+        cfg_blob: dict[str, Any] = {}
         if use_mcp:
-            env["OPENCODE_CONFIG_CONTENT"] = json.dumps({
-                "mcp": {"omi": {"type": "local", "command": mcp_cmd, "enabled": True}},
-            })
+            cfg_blob["mcp"] = {"omi": {"type": "local", "command": mcp_cmd, "enabled": True}}
+        if role == "talker":
+            # Talker only speaks and calls Omi's gated MCP tools, matching ClaudeBrain(tools="").
+            cfg_blob["permission"] = {"bash": "deny", "edit": "deny", "write": "deny"}
+        if cfg_blob:
+            env["OPENCODE_CONFIG_CONTENT"] = json.dumps(cfg_blob)
         return argv, env
 
     if provider == "codex":
@@ -142,6 +147,8 @@ def build_cli_invocation(
         if session_id:
             argv.append("resume")
         argv += ["--json", "--skip-git-repo-check"]
+        if role == "talker":
+            argv += ["-c", 'sandbox_mode="read-only"']
         if model:
             argv += ["-m", model]
         if use_mcp:
@@ -156,6 +163,8 @@ def build_cli_invocation(
 
     if provider == "agy":
         argv = [exe, "--output-format", "stream-json", "--disable-slash-commands"]
+        if role == "talker":
+            argv.append("--sandbox")
         if model:
             argv += ["--model", model]
         if effort:
@@ -543,6 +552,7 @@ class CliWorker:
             session_id=self._cli_session,
             use_mcp=self.use_mcp,
             binary=self.binary,
+            role="worker",
         )
         env = {**os.environ, **extra_env} if extra_env else None
         proc = await asyncio.create_subprocess_exec(

@@ -59,6 +59,7 @@ def test_install_writes_widget_unit_and_one_keys_block(home):
 
     assert json.loads((paths.plugin / "manifest.json").read_text())["id"] == "omi"
     assert install._tree(paths.plugin) == install._tree(REPO / "omarchy/plugin")
+    assert paths.command.is_symlink() and os.readlink(paths.command) == str(OMI)  # `omi` works in a terminal
 
     unit = paths.unit.read_text()
     assert unit.startswith(install.UNIT_MARK)
@@ -135,6 +136,7 @@ def test_uninstall_removes_exactly_what_install_added(home):
     assert paths.bindings.read_text() == ORIGINAL
     assert not paths.plugin.exists()
     assert not paths.unit.exists()
+    assert not paths.command.is_symlink()
     assert report.problems == []
     assert len(backups(home)) == 2
 
@@ -165,6 +167,16 @@ def test_uninstall_leaves_things_it_did_not_write(home):
     assert paths.unit.exists() and (paths.plugin / "manifest.json").exists()
     assert paths.bindings.read_text() == ORIGINAL
     assert len(report.problems) == 2
+
+
+def test_another_omi_command_is_never_replaced(home):
+    paths = Paths(home)
+    paths.command.parent.mkdir(parents=True)
+    paths.command.write_text("#!/bin/sh\necho another omi\n")
+    report = install.install(home, OMI, activate=False)
+    assert any(str(paths.command) in p for p in report.problems)  # says why
+    install.uninstall(home, activate=False)
+    assert paths.command.read_text().startswith("#!/bin/sh")
 
 
 def test_a_broken_block_is_left_for_the_user(home):
@@ -314,7 +326,7 @@ def test_bar_widget_runs_against_a_fake_daemon(tmp_path):
     checks = [line[line.index("CHECK "):] for line in output.splitlines() if "CHECK " in line]
     assert "HARNESS DONE" in output, output[-3000:]
     assert checks and all(c.startswith("CHECK pass") for c in checks), "\n".join(checks)
-    assert len(checks) == 18, "\n".join(checks)
+    assert len(checks) == 25, "\n".join(checks)
     for bad in ("TypeError", "ReferenceError", "is not a type", "unavailable", "Cannot assign", "Unable to assign"):
         assert bad not in output, output[-3000:]
     requests = [json.loads(line) for line in log.read_text().splitlines()]

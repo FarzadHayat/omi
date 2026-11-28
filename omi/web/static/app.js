@@ -20,6 +20,7 @@ let ws = null;
 let online = false;
 let retry = 0;
 let confirmId = null;
+let focusBeforeConfirm = null;
 
 // --- state and transcript ---------------------------------------------------------
 
@@ -47,16 +48,25 @@ function addLine(kind, text) {
 }
 
 function showConfirm(c) {
+  if (els.confirm.hidden && document.activeElement instanceof HTMLElement) {
+    focusBeforeConfirm = document.activeElement;
+  }
   confirmId = c.id;
   els.question.textContent = c.question;
   els.detail.textContent = c.detail || "";
   els.detail.hidden = !c.detail;
   els.confirm.hidden = false;
+  els.no.focus();
 }
 
 function hideConfirm() {
+  const wasOpen = !els.confirm.hidden;
   confirmId = null;
   els.confirm.hidden = true;
+  if (wasOpen && focusBeforeConfirm && focusBeforeConfirm.isConnected) {
+    focusBeforeConfirm.focus();
+  }
+  focusBeforeConfirm = null;
 }
 
 // --- connection -------------------------------------------------------------------
@@ -316,6 +326,12 @@ els.stop.addEventListener("click", () => {
 
 els.yes.addEventListener("click", () => answer(true));
 els.no.addEventListener("click", () => answer(false));
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !els.confirm.hidden) {
+    e.preventDefault();
+    answer(false);
+  }
+});
 function answer(yes) {
   if (confirmId) send({ cmd: "confirm", answer: yes, id: confirmId });
   hideConfirm();

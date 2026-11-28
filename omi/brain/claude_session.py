@@ -31,10 +31,11 @@ def omi_mcp_available() -> bool:
         return False
 
 
-def mcp_config() -> str:
+def mcp_config(role: str = "talker") -> str:
     return json.dumps({"mcpServers": {"omi": {
         "command": "uv",
-        "args": ["run", "--project", str(PROJECT_ROOT), "python", "-m", "omi.tools.mcp_server"],
+        "args": ["run", "--project", str(PROJECT_ROOT), "python", "-m", "omi.tools.mcp_server",
+                 "--role", role],
     }}})
 
 
@@ -42,8 +43,9 @@ class ClaudeSession:
     def __init__(self, model: str, system_prompt: str, *, tools: str = "",
                  setting_sources: str = "", use_mcp: bool | None = None,
                  cwd: str | None = None, claude_cmd: list[str] | None = None,
-                 effort: str = "", chrome: bool = False) -> None:
+                 effort: str = "", chrome: bool = False, role: str = "talker") -> None:
         self.model = model
+        self.role = role  # tells omi's permission server who is asking (talker or worker)
         self.system_prompt = system_prompt
         self.effort = effort  # "" leaves the CLI's default effort
         self.chrome = chrome  # enable Claude in Chrome browser control
@@ -86,7 +88,7 @@ class ClaudeSession:
         if self.effort:
             cmd += ["--effort", self.effort]
         if self.use_mcp:
-            cmd += ["--mcp-config", mcp_config(), "--permission-prompt-tool", "mcp__omi__approve"]
+            cmd += ["--mcp-config", mcp_config(self.role), "--permission-prompt-tool", "mcp__omi__approve"]
         else:
             cmd += ["--permission-prompts", "none"]  # nobody to ask, so anything risky is denied
         return cmd

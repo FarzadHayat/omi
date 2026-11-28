@@ -1,18 +1,22 @@
 # Omi
 
-[![Built for Omarchy](https://raw.githubusercontent.com/tcballard/omarchy-badges/85f859029e7b05ada6dbe73506d07a91/badges/v1/built-for-omarchy.svg)](https://github.com/tcballard/omarchy-badges)
+[![Built for Omarchy: Plugin](https://raw.githubusercontent.com/tcballard/omarchy-badges/75975e5b5bf75e7ede3764bcd2950046f7abfe2c/badges/v1/omarchy-plugin.svg)](https://github.com/tcballard/omarchy-badges)
 
 A local-first voice assistant and animated on-screen companion for Omarchy & Hyprland, with desktop, browser, terminal, and T3 Code control.
 
 ![Omi](docs/cover.jpg)
 
+![Omi bar panel, live settings, and floating companion overlay](docs/screenshot.png)
+
 ## Features
 
-- **Talks like a phone call**: Interrupt Omi mid-sentence just by talking (PipeWire WebRTC echo cancellation keeps it from hearing itself, no headphones needed), and replies stay short and conversational.
+- **Talks like a phone call**: Interrupt Omi mid-sentence just by talking, or say "mm-hm" and it lowers its voice for a moment and keeps going (PipeWire WebRTC echo cancellation keeps it from hearing itself, no headphones needed), and replies stay short and conversational.
 - **Never stuck on a limit**: The brain is a priority list (`brain.fallbacks`). If your preferred model hits its usage limit or fails before answering, the next one (for example a free OpenCode model, then a local model) takes the same turn, and the preferred one is retried after 15 minutes.
 - **Fast voice loop + smart wake word**: Always-on **"Hey Omi"** / **"Okay Omi"** wake word (`sherpa-onnx` 3.3M streaming keyword spotter + Silero VAD, ~1.7% CPU, toggleable live) with **Smart (`auto`)**, **Continuous**, and **Single-turn** call modes, plus soft procedural sound effects.
+- **Look to talk** (optional): Turn it on and just talk while facing your screen, no wake word. The webcam checks which way your head points and that your lips are moving, so turning to talk to someone in the room is ignored, a video talking while you watch doesn't count, and turning away mid-sentence drops the request. Press **Tune** in Settings or just ask Omi to "tune look to talk": Omi talks you through a 20-second setup out loud (stay quiet, read two sentences, look away), fits it to your face, camera and desk, checks the mic hears you, and asks by voice whether to only answer you. (`omi look-tune` does the same, or runs in the terminal when Omi isn't running.) `omi look-test` shows live what it sees. The camera only switches on when the mic hears a voice and turns off after 15 seconds of quiet, and it rests entirely while a call or dictation app is using the mic, so video calls always get the camera. Runs locally (OpenCV YuNet, a few ms per frame), frames are never saved.
+- **Only my voice** (optional): Save your voice during `omi look-tune` and Omi ignores everyone else, including the TV and videos. Add housemates with `omi voice add NAME`. Voiceprints stay on your PC (readable only by you) and are deleted when you turn it off; short words like "stop" always work.
 - **Best local & cloud STT and TTS**:
-  - **Local STT**: **NVIDIA Parakeet TDT 0.6B v3** (default — 10x faster than streaming, native punctuation & capitalization, 25 languages), **Nemotron Streaming 160ms**, or **Moonshine**.
+  - **Local STT**: **NVIDIA Parakeet TDT 0.6B v3** (default: 10x faster than streaming, native punctuation & capitalization, 25 languages), **Nemotron Streaming 160ms**, or **Moonshine**.
   - **Cloud STT**: **Groq Whisper Large v3 Turbo** (`GROQ_API_KEY`), **Deepgram Nova-3** (`DEEPGRAM_API_KEY`), or **OpenAI `gpt-4o-mini-transcribe`** (`OPENAI_API_KEY`).
   - **Local & Cloud TTS**: **Kokoro v1.0** (default local neural), **Piper**, **OpenAI `gpt-4o-mini-tts`** (`OPENAI_API_KEY`), or **ElevenLabs `eleven_flash_v2_5`** (`ELEVENLABS_API_KEY`). Switch live from the bar Settings drawer or `omi engines`.
 - **Animated companion mascot**: Lives in the Omarchy bar and pops up as a click-through floating overlay with speech bubbles, pointing/highlighting (`point_at`, `highlight_window`), and cursor-following eyes.
@@ -22,8 +26,8 @@ A local-first voice assistant and animated on-screen companion for Omarchy & Hyp
   - **GUI & vision**: AT-SPI accessibility inspection and actions (`ui_inspect`, `ui_action`), screen capture (`capture_screen`), and pointer/keyboard control (`ydotool` + `wtype`).
   - **Browser**: Claude in Chrome MCP integration on the background worker for reading tabs, navigating, clicking, and filling forms.
   - **Terminal & T3 Code**: Inspect and run commands in live **Herdr** or **tmux** panes, and list, read, start, message, or open on screen **T3 Code** threads (by project name, e.g. "show me the bne tower chat") via the `t3` CLI and T3's desktop deep links.
-- **Safety guardrails**: Hard-blocks reading secrets/keys/tokens and asks for spoken or on-screen confirmation before destructive commands, terminal mutations, or sensitive actions.
-- **Model-agnostic & subscription-first**: Works with your existing AI CLI subscriptions (no API keys needed) — **Claude Code** (`claude`), **OpenCode** (`opencode`, free models / Copilot / multi-provider subs), **Codex** (`codex`, ChatGPT Plus/Pro), **Antigravity** (`agy`, Google AI Pro/Ultra), **Gemini CLI** (`gemini`), or any **local / OpenAI-compatible** endpoint (`llama-server`, Ollama, LM Studio, OpenRouter, xAI/Grok). Switch providers or models live from the bar Settings drawer (dropdowns labelled "on this PC" or "cloud", with a "best for this PC" pick among your downloaded local models) or with `omi set brain.talker <provider>`, `omi set brain.model <model>`, `omi set brain.local_model <file.gguf>` and `omi set brain.fallbacks "opencode,local"`.
+- **Safety guardrails**: Hard-blocks reading secrets/keys/tokens and asks for spoken or on-screen confirmation before destructive commands, terminal mutations, or sensitive actions. The background worker's mode is yours to pick in Settings or with `omi set brain.worker_mode`: **auto** (default, asks before risky steps) or **unrestricted** (never asks); secrets stay blocked in both.
+- **Model-agnostic & subscription-first**: Works with your existing AI CLI subscriptions (no API keys needed): **Claude Code** (`claude`), **OpenCode** (`opencode`, free models / Copilot / multi-provider subs), **Codex** (`codex`, ChatGPT Plus/Pro), **Antigravity** (`agy`, Google AI Pro/Ultra), **Gemini CLI** (`gemini`), or any **local / OpenAI-compatible** endpoint (`llama-server`, Ollama, LM Studio, OpenRouter, xAI/Grok). Switch providers or models live from the bar Settings drawer (dropdowns labelled "on this PC" or "cloud", with a "best for this PC" pick among your downloaded local models) or with `omi set brain.talker <provider>`, `omi set brain.model <model>`, `omi set brain.local_model <file.gguf>` and `omi set brain.fallbacks "opencode,local"`.
 - **Persistent compacting memory**: Markdown facts + rolling session digests + SQLite FTS5 search, with optional read-only shared memory directory (e.g. an Obsidian/Syncthing folder).
 - **Private mobile/tablet web UI**: Optional local web PWA served on `127.0.0.1:47911` for private access via `tailscale serve`.
 
@@ -42,7 +46,7 @@ A local-first voice assistant and animated on-screen companion for Omarchy & Hyp
 - Arch Linux / [Omarchy](https://omarchy.org) with Hyprland, `omarchy-shell` (Quickshell), PipeWire, `wtype`, `wl-clipboard`, `grim`
 - Python 3.12+ and [`uv`](https://docs.astral.sh/uv/)
 - At least one AI backend (subscription CLI or local/OpenAI-compatible):
-  - **Claude Code** (`claude` — Claude Pro/Max), **OpenCode** (`opencode` — free / Copilot / subs), **Codex** (`codex` — ChatGPT Plus/Pro), **Antigravity** (`agy` — Google AI Pro/Ultra), **Gemini CLI** (`gemini`), **or** `llama-server` / Ollama / any OpenAI-compatible endpoint (`brain.talker = "local"`)
+  - **Claude Code** (`claude`, Claude Pro/Max), **OpenCode** (`opencode`, free / Copilot / subs), **Codex** (`codex`, ChatGPT Plus/Pro), **Antigravity** (`agy`, Google AI Pro/Ultra), **Gemini CLI** (`gemini`), **or** `llama-server` / Ollama / any OpenAI-compatible endpoint (`brain.talker = "local"`)
 - Optional:
   - `ydotool` (enabled as a user service) for visual mouse clicks/scrolls
   - `python-gobject` + `at-spi2-core` for AT-SPI UI inspection
@@ -91,6 +95,8 @@ omi set stt.engine parakeet    # switch STT live (parakeet|nemotron|moonshine|gr
 omi set tts.engine kokoro      # switch TTS live (kokoro|piper|openai|elevenlabs)
 omi set tts.voice bm_george    # switch active voice live
 omi set wake.enabled off       # pause/resume always-on wake word live
+omi set wake.look_to_talk on   # talk while facing the screen, no wake word (uses the webcam)
+omi set wake.camera auto       # which webcam look to talk uses (a wrong name lists your cameras)
 omi say "what's running in my terminal?"
 ```
 

@@ -7,6 +7,11 @@ returns one text block holding {"behavior": "allow"} or
 
 Confirmation goes to the user through the omi daemon ("ask_confirm" on its
 socket). No daemon means nobody can say yes, so the answer is no.
+
+"--role worker" marks the background worker's server. With brain.worker_mode set to
+"unrestricted" it never asks: what would need a yes runs, and what is blocked (secrets)
+stays blocked. The mode is read from the config file on every call, so a change in
+Settings applies to the running worker at once.
 """
 
 from __future__ import annotations
@@ -14,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import sys
 import time
 from dataclasses import replace
 from typing import Any
@@ -108,7 +114,12 @@ def daemon_tools() -> list[Tool]:
 
         return fn
 
-    tools = [*memory_tools(NullMemory()), delegate_tool(None)]  # type: ignore[arg-type]
+    from omi.look_setup import camera_tool, look_setup_tool
+
+    from omi.worker import worker_jobs_tool
+
+    tools = [*memory_tools(NullMemory()), delegate_tool(None), look_setup_tool(None),  # type: ignore[arg-type]
+             camera_tool(None), worker_jobs_tool(None)]
     return [replace(t, fn=proxy(t.name)) for t in tools]
 
 
@@ -185,13 +196,16 @@ def question_for(tool_name: str, tool_input: dict[str, Any], reason: str, regist
 
 
 async def approve(
-    tool_name: str, tool_input: dict[str, Any], registry: ToolRegistry, approvals: Approvals, ask=ask_confirm
+    tool_name: str, tool_input: dict[str, Any], registry: ToolRegistry, approvals: Approvals, ask=ask_confirm,
+    *, unattended: bool = False,
 ) -> dict[str, Any]:
     decision, reason = classify_claude_tool(tool_name, tool_input)
     if decision == "allow":
         return {"behavior": "allow"}
     if decision == "deny":
         return {"behavior": "deny", "message": reason}
+    if unattended:
+        return {"behavior": "allow"}
     question, detail = question_for(tool_name, tool_input, reason, registry)
     if await ask(question, detail=detail):
         if tool_name.startswith("mcp__omi__"):
@@ -200,14 +214,24 @@ async def approve(
     return {"behavior": "deny", "message": f"The user did not approve. {reason}"}
 
 
-def build_server() -> Server:
-    registry = build_registry(config.load())
+def worker_unrestricted(role: str) -> bool:
+    if role != "worker":
+        return False
+    try:
+        return config.load().brain.worker_mode == "unrestricted"
+    except Exception:
+        return False  # an unreadable config never loosens safety
+
+
+def build_server(role: str = "talker") -> Server:
+    cfg = config.load()
+    registry = build_registry(cfg)
     for tool in daemon_tools():
         registry.register(tool)
     approvals = Approvals()
 
     async def confirm(question: str) -> bool:
-        return approvals.take(question) or await ask_confirm(question)
+        return worker_unrestricted(role) or approvals.take(question) or await ask_confirm(question)
 
     registry.confirm = confirm
     tools = [types.Tool(name=t.name, description=t.description, input_schema=t.parameters)
@@ -224,7 +248,8 @@ def build_server() -> Server:
     async def on_call_tool(ctx, params: types.CallToolRequestParams) -> types.CallToolResult:
         args = params.arguments or {}
         if params.name == "approve":
-            answer = await approve(str(args.get("tool_name", "")), args.get("input") or {}, registry, approvals)
+            answer = await approve(str(args.get("tool_name", "")), args.get("input") or {}, registry, approvals,
+                                   unattended=worker_unrestricted(role))
             return types.CallToolResult(content=[types.TextContent(text=json.dumps(answer))])
         result = await registry.call(params.name, args)
         text = result.text
@@ -241,8 +266,14 @@ def build_server() -> Server:
     return Server("omi", on_list_tools=on_list_tools, on_call_tool=on_call_tool)
 
 
+def role_from_argv(argv: list[str]) -> str:
+    if "--role" in argv[:-1]:
+        return argv[argv.index("--role") + 1]
+    return "talker"
+
+
 async def main() -> None:
-    server = build_server()
+    server = build_server(role_from_argv(sys.argv[1:]))
     async with stdio_server() as (read_stream, write_stream):
         await server.run(read_stream, write_stream, server.create_initialization_options())
 

@@ -84,7 +84,7 @@ async def build(cfg: Config) -> Daemon:
     registry = build_registry(cfg)
     for tool in memory_tools(memory):
         registry.register(tool)
-    from omi.worker import SwitchableWorker, delegate_tool
+    from omi.worker import SwitchableWorker, delegate_tool, worker_jobs_tool
 
     notices: list[Any] = []  # set to the daemon's broadcast once it exists
 
@@ -102,6 +102,7 @@ async def build(cfg: Config) -> Daemon:
     # provider while Omi runs.
     worker = SwitchableWorker(brains.create_worker_chain(cfg, on_worker_switch))
     registry.register(delegate_tool(worker))
+    registry.register(worker_jobs_tool(worker))
 
     def chain(c: Config) -> Any:
         return brains.create_chain(c, registry, on_switch)
@@ -317,6 +318,7 @@ async def build(cfg: Config) -> Daemon:
 
         daemon.web = WebServer(daemon, cfg.web)
     from omi.audio.wake import WakeListener
+    from omi.voice_id import VoiceGate
 
     daemon.wake = WakeListener(
         session,
@@ -327,7 +329,12 @@ async def build(cfg: Config) -> Daemon:
         is_ptt_active=lambda: daemon._listening,
         broadcast=daemon.broadcast,
         play_sfx=sfx.play,
+        voice_gate=VoiceGate(lambda: cfg.wake.only_my_voice),
     )
+    from omi.look_setup import camera_tool, look_setup_tool
+
+    registry.register(look_setup_tool(daemon.look_setup))
+    registry.register(camera_tool(daemon))
     return daemon
 
 

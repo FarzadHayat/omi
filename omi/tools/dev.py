@@ -450,6 +450,125 @@ async def t3_threads(project: str = "", limit: int = 8) -> ToolResult:
     return ToolResult(True, f"{len(threads)} T3 Code threads. Most recent: {spoken}.", {"threads": slim})
 
 
+# --- tasks Omi handed to T3 Code: done, running, stuck, waiting or stopped -------------
+
+TASKS_FILE = "t3_tasks.json"
+TASKS_KEEP = 30
+TASKS_RECENT_S = 24 * 3600
+STUCK_AFTER_S = 10 * 60  # a running task with nothing new for this long may be stuck
+_LIVE = {"running", "starting", "preparing", "queued"}
+
+
+def _tasks_path() -> Path:
+    from omi import config
+
+    return config.STATE_DIR / TASKS_FILE
+
+
+def remember_task(thread_id: str, title: str, path: Path | None = None) -> None:
+    """Note a thread Omi started, so "how are my tasks going?" can find it later."""
+    import time
+
+    path = path or _tasks_path()
+    try:
+        tasks = json.loads(path.read_text())
+    except (OSError, ValueError):
+        tasks = []
+    tasks = [t for t in tasks if t.get("id") != thread_id]
+    tasks.append({"id": thread_id, "title": title, "started": time.time()})
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(tasks[-TASKS_KEEP:]))
+    except OSError:
+        pass
+
+
+def _ago(seconds: float) -> str:
+    m = int(seconds // 60)
+    if m < 1:
+        return "under a minute"
+    if m < 60:
+        return f"{m} minute{'s' if m != 1 else ''}"
+    h = round(m / 60)
+    return f"{h} hour{'s' if h != 1 else ''}"
+
+
+def _first_sentence(text: str, limit: int = 180) -> str:
+    plain = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)  # links: keep the words
+    plain = re.sub(r"[*_`#>]+", "", plain)
+    plain = " ".join(plain.split())
+    m = re.match(r"(.+?[.!?])(\s|$)", plain)
+    out = m.group(1) if m else plain
+    return out if len(out) <= limit else out[: limit - 1].rstrip() + "…"
+
+
+def describe_task(thread: dict, last_reply: str, now: float) -> dict:
+    """Plain words for one task: done, running, stuck, waiting, stopped or failed."""
+    from datetime import datetime
+
+    status = str(thread.get("status") or "")
+    try:
+        updated = datetime.fromisoformat(str(thread.get("updatedAt")).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        updated = now
+    quiet = max(0.0, now - updated)
+    if status in _LIVE:
+        state = "stuck" if quiet >= STUCK_AFTER_S else "running"
+    elif status == "waiting":
+        state = "waiting"
+    elif status == "completed":
+        state = "done"
+    elif status in ("interrupted", "cancelled", "rolled_back"):
+        state = "stopped"
+    elif status == "failed":
+        state = "failed"
+    else:
+        state = status or "unknown"
+    said = {
+        "running": f"still running, last active {_ago(quiet)} ago",
+        "stuck": f"may be stuck: nothing new for {_ago(quiet)}",
+        "waiting": "waiting for an answer from you",
+        "stopped": "stopped before it finished",
+        "failed": "failed",
+    }.get(state, state)
+    if state == "done":
+        said = "done" + (f": {_first_sentence(last_reply)}" if last_reply.strip() else "")
+    return {"id": thread.get("threadId") or thread.get("id", ""), "title": thread.get("title", "Untitled"),
+            "state": state, "said": said, "link": thread.get("link", ""), "status": status}
+
+
+async def t3_tasks(path: Path | None = None) -> ToolResult:
+    import asyncio
+    import time
+
+    t3 = _require_t3()
+    if not t3:
+        return ToolResult(False, "T3 Code CLI is not installed on this machine.")
+    try:
+        tasks = json.loads((path or _tasks_path()).read_text())
+    except (OSError, ValueError):
+        tasks = []
+    now = time.time()
+    tasks = [t for t in tasks if now - float(t.get("started", 0)) <= TASKS_RECENT_S][-6:]
+    if not tasks:
+        return ToolResult(True, "I haven't handed any tasks to T3 Code in the last day.", {"tasks": []})
+
+    async def check(task: dict) -> dict:
+        rc, out, err = await run(build_t3_read(t3, task["id"], 1), timeout=15.0)
+        data = _parse_json(out) if rc == 0 else None
+        if not isinstance(data, dict):
+            return {"id": task["id"], "title": task.get("title", ""), "state": "unknown",
+                    "said": "I couldn't check it", "link": ""}
+        thread = data.get("thread") or data
+        replies = [m for m in data.get("messages") or [] if m.get("role") == "assistant"]
+        return describe_task(thread, str(replies[-1].get("text", "")) if replies else "", now)
+
+    found = await asyncio.gather(*(check(t) for t in reversed(tasks)))
+    spoken = " ".join(f"{t['title']}: {t['said'].rstrip('.…')}." for t in found)
+    n = len(found)
+    return ToolResult(True, f"{n} task{'s' if n != 1 else ''} from today. {spoken}", {"tasks": found})
+
+
 async def t3_read(thread: str, messages: int = 5) -> ToolResult:
     t3 = _require_t3()
     if not t3:
@@ -490,6 +609,8 @@ async def t3_start(message: str, project: str = "", title: str = "") -> ToolResu
     data = _parse_json(out)
     tid = (data.get("threadId") or data.get("id") or "") if isinstance(data, dict) else ""
     label = (data.get("title") or title or tid[:8]) if isinstance(data, dict) else title
+    if tid:
+        remember_task(tid, label or message.strip()[:60])
     return ToolResult(True, f"Started a new T3 Code thread{f' ({label})' if label else ''}.",
                       data if isinstance(data, dict) else {"raw": out})
 
@@ -594,6 +715,10 @@ def tools() -> list[Tool]:
              "reversible", terminal_open, terminal_open_question, terminal_command_safety),
         Tool("t3_threads", "List T3 Code threads (id, title, status, link) for a project: a folder name like 'bne tower', a path, or an ID.",
              _schema({"project": s, "limit": i}), "read", t3_threads),
+        Tool("t3_tasks", "Check on the tasks Omi handed to T3 Code in the last day: for each, whether it is "
+             "done (and what it did), still running, may be stuck, waiting for an answer, or stopped. "
+             "Use when asked how tasks or jobs are going, or whether something finished.",
+             _schema({}), "read", t3_tasks),
         Tool("t3_read", "Read recent messages and status of a T3 Code thread by ID.",
              _schema({"thread": s, "messages": i}, ["thread"]), "read", t3_read),
         Tool("t3_start", "Start a new T3 Code thread with a prompt (optional project name/path/ID; defaults to scratch).",

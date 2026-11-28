@@ -11,12 +11,14 @@ from __future__ import annotations
 import asyncio
 import collections
 import contextlib
+import json
 import shutil
 
 import numpy as np
 
 CHUNK = 512  # samples, 32 ms at 16 kHz
 IN_RATE = 16000
+DUCK_VOLUME = "40%"  # about -24 dB: still audible, out of the way of the user's voice
 
 
 async def _collect(stream: asyncio.StreamReader | None, tail: collections.deque[str]) -> None:
@@ -52,7 +54,9 @@ class PipeWireOut:
             raise RuntimeError("pw-cat not found; install pipewire")
         cmd = [exe, "--playback", "--raw", "--format", "f32", "--rate", str(sample_rate),
                "--channels", "1", "--latency", "20ms", "--media-role", "Assistant",
-               "-P", "application.name=Omi", "-P", "node.name=omi-playback"]
+               "-P", "application.name=Omi", "-P", "node.name=omi-playback",
+               # A lowered voice (duck) must not be remembered for the next reply.
+               "-P", "state.restore-props=false"]
         if self.sink:
             cmd += ["--target", self.sink]
         cmd.append("-")
@@ -97,6 +101,26 @@ class PipeWireOut:
             self.error = _failure("audio output", rc, self._stderr)
             raise RuntimeError(f"nothing was played: {self.error}")
         self.error = None
+
+    async def duck(self, on: bool) -> None:
+        """Lower Omi's voice at once while the user talks over it, or bring it back.
+        Queued audio is already in the stream, so this sets the stream volume itself."""
+        if self._proc is None or shutil.which("pactl") is None:
+            return
+        listing = await asyncio.create_subprocess_exec(
+            "pactl", "-f", "json", "list", "sink-inputs",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        out, _ = await listing.communicate()
+        try:
+            streams = json.loads(out or b"[]")
+        except ValueError:
+            return
+        for stream in streams:
+            if (stream.get("properties") or {}).get("node.name") == "omi-playback":
+                setter = await asyncio.create_subprocess_exec(
+                    "pactl", "set-sink-input-volume", str(stream["index"]), DUCK_VOLUME if on else "100%",
+                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+                await setter.wait()
 
     async def stop(self) -> None:
         proc, pump = self._proc, self._pump
@@ -197,3 +221,45 @@ class PipeWireIn:
                 self.error = _failure("microphone", rc, self._stderr)
         chunks, self._chunks = self._chunks, []
         return np.concatenate(chunks) if chunks else np.zeros(0, np.float32)
+
+
+def parse_mic_users(outputs: list[dict], sources: str) -> list[str]:
+    """Apps other than Omi recording a microphone, from `pactl -f json list source-outputs`
+    and `pactl list short sources`. Desktop-audio recorders (".monitor" sources), level
+    meters, paused streams and the echo canceller's own capture do not count."""
+    monitors = set()
+    for line in sources.splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 2 and parts[1].endswith(".monitor"):
+            monitors.add(parts[0].strip())
+    users: list[str] = []
+    for out in outputs:
+        props = out.get("properties") or {}
+        node = str(props.get("node.name") or "")
+        app = str(props.get("application.name") or props.get("application.process.binary") or "")
+        if out.get("corked") or str(out.get("source")) in monitors:
+            continue
+        if app == "Omi" or node.startswith(("omi-", "echo-cancel")):
+            continue
+        if str(props.get("stream.monitor") or "").lower() == "true":
+            continue
+        users.append(app or node or "another app")
+    return list(dict.fromkeys(users))
+
+
+def mic_users() -> list[str]:
+    """Apps other than Omi using a microphone right now (a call, dictation). Empty when
+    PipeWire cannot be asked."""
+    import json
+    import subprocess
+
+    if shutil.which("pactl") is None:
+        return []
+    try:
+        outs = subprocess.run(["pactl", "-f", "json", "list", "source-outputs"],
+                              capture_output=True, text=True, timeout=2.0, check=True).stdout
+        srcs = subprocess.run(["pactl", "list", "short", "sources"],
+                              capture_output=True, text=True, timeout=2.0, check=True).stdout
+        return parse_mic_users(json.loads(outs or "[]"), srcs)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return []
