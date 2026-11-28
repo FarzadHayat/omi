@@ -53,8 +53,8 @@ class AudioConfig:
     sink: str = ""  # PipeWire sink name; empty means the default output, "null" plays nothing
     silence_ms: int = 300  # hands-free mode: silence that ends a turn
     sounds: bool = True  # cute UI/voice sound effects (wake, heard, acting, confirm, done, sleep)
-    # Cancel Omi's own voice from the microphone (PipeWire WebRTC echo canceller), so the
-    # mic can stay open while Omi talks.
+    # Cancel everything the speakers play (Omi's voice, videos, music) from the microphone
+    # (PipeWire WebRTC echo canceller), so Omi only hears the person in the room.
     echo_cancel: bool = True
     # Talk over Omi to interrupt it, like a phone call. Needs echo_cancel (or headphones).
     barge_in: bool = True

@@ -138,8 +138,8 @@ async def build(cfg: Config) -> Daemon:
         if after != before and not session.closed and session.state is State.IDLE and session.pending_confirm is None:
             await session.brain.start(after)
 
-    # Echo cancellation: Omi plays into, and listens from, a cancelled pair so it never
-    # hears itself and the user can talk over it.
+    # Echo cancellation: Omi listens from a mic with all speaker audio removed, so it never
+    # hears itself or a video as the user, and the user can talk over it.
     source, sink, echo = cfg.audio.source, cfg.audio.sink, None
     if cfg.audio.echo_cancel and cfg.audio.sink != "null" and not cfg.audio.source.endswith(".monitor"):
         from omi.audio import echo as echo_cancel

@@ -254,3 +254,14 @@ async def test_turn_with_no_speaker_reports_an_error(no_devices, tmp_path):
                 out=PipeWireOut(), state_dir=tmp_path)
     res = await s.run_turn("hello")
     assert res.reply == "Okay." and res.error and "no audio output device" in res.error
+
+
+def test_echo_cancel_references_all_speaker_audio():
+    from omi.audio import echo
+
+    conf = echo.build_conf("alsa_input.cam", 'hdmi "out"')
+    assert "monitor.mode = true" in conf  # cancels videos and music, not just Omi's voice
+    assert 'target.object = "hdmi \\"out\\""' in conf
+    assert 'target.object = "alsa_input.cam"' in conf
+    assert f'node.name = "{echo.SOURCE}"' in conf
+    assert "target.object" not in echo.build_conf("", "hdmi").split("capture.props")[1].split("\n")[0]
